@@ -134,6 +134,37 @@ func _resolve_tick_rate() -> int:
 	return Engine.physics_ticks_per_second if Engine.physics_ticks_per_second > 0 else tick_rate
 
 
+## Counts at [param rate] ticks a second from now on. Returns whether it changed.
+##
+## [b]A client's rate is the SERVER's, and it does not come from the engine.[/b]
+## `_resolve_tick_rate` reads `Engine.physics_ticks_per_second`, which on a server is
+## `sv_tickrate` and on a client is whatever the host project exported — 128 here, 60
+## in a project that never set it. So a client left on its own number simulates at a
+## rate the server does not, and since `1.0 / tick_rate` is the step prediction
+## replays with and the divisor every replicated run time is reconstituted through, a
+## client on 60 against a server on 128 shows times wrong by that ratio while
+## everything else looks healthy. [G2GNetBridge] calls this from HELLO, which has
+## carried the server's rate since it was written.
+##
+## Every run in progress is abandoned, by [method DotTimerManager.set_tick_rate]'s own
+## rule: a run half at one rate and half at another is a run at neither. That costs
+## nothing here, because this is called before a client has a player.
+func set_tick_rate(rate: int) -> bool:
+	if rate <= 0 or rate == tick_rate:
+		return false
+
+	timers.set_tick_rate(rate)
+	# Read back rather than assigned: the timer manager clamps, and two copies of
+	# this number that disagree is the failure the whole method exists to prevent.
+	tick_rate = timers.tick_rate
+
+	for id in players:
+		(players[id] as G2GPlayer).tick_rate = tick_rate
+
+	DotLog.info(CHANNEL, "tick rate adopted", {"tick_rate": tick_rate})
+	return true
+
+
 # --- Building --------------------------------------------------------------
 
 func _build_styles() -> void:

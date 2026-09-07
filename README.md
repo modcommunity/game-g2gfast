@@ -27,12 +27,13 @@ godot --path .
 
 | | |
 | --- | --- |
-| **WASD** / **Space** / **Shift** | Move, jump (hold it, if the server allows), duck |
+| **WASD** / **Space** / **Ctrl** | Move, jump (hold it, if the server allows), duck |
 | **F5** | First / third person |
 | **Tab** | Cycle style — normal, sideways, half-sideways, backwards, low gravity, prebhop |
 | **R** | Back to the start |
 | **C** / **V** | Save a practice checkpoint / go back to it |
 | **M** | Next map |
+| **Esc** / **click** | Release the mouse / take it back. In a browser a click is also what captures it to begin with — pointer lock needs a user gesture |
 
 ## Running a server
 
@@ -65,6 +66,14 @@ g2g_zone stage main 1
 g2g_zone_save
 ```
 
+## Playing it in a browser
+
+`dot-server-setup-test` vendors this game into its server tool and its browser client
+shell, so `./demo.sh up` there brings up a g2gfast server with a page you can open —
+no Godot on the player's machine at all. The two projects stay in step through that
+project's `setup.sh`, which copies `game/`, `scenes/`, `maps/` and `avatars/` across,
+and its `tools/check.sh`, which fails if the copy has gone stale.
+
 ## What it uses
 
 dot-fps-controller · dot-timer · dot-map · dot-leaderboard · dot-server ·
@@ -83,8 +92,8 @@ done
 ```bash
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_run.tscn   # 90 checks
-godot --headless --path . res://examples/headless_net.tscn   # 76 checks, server + client in one process
+godot --headless --path . res://examples/headless_run.tscn   # 91 checks
+godot --headless --path . res://examples/headless_net.tscn   # 81 checks, server + client in one process
 godot --headless --path . res://examples/dedicated.tscn      # 52 checks
 ```
 

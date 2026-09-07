@@ -144,7 +144,14 @@ func validate() -> DotResult:
 			"%.0f vs %.0f u/s" % [max_velocity, max_speed]
 		)
 
-	if initial_map == &"":
+	# [b]Only an authoritative instance chooses a map.[/b] A client is told which map
+	# it is in by HELLO and clears this deliberately (see [G2GClient]) — so requiring
+	# one unconditionally made every networked client's own configuration invalid.
+	# `load_layered` validates last and returns the failure, so every client logged
+	# "the g2gfast configuration is not usable" on startup, about a config that was
+	# exactly right for a client. Visible in the browser and in no headless run, because
+	# the suites build their client config in code and never layer it.
+	if authoritative and initial_map == &"":
 		return DotResult.fail(
 			DotError.CODE_INVALID, "There has to be a map to start on."
 		)

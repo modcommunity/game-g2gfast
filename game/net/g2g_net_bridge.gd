@@ -662,6 +662,20 @@ func _apply_hello(reader: DotNetReader) -> void:
 		return
 
 	local_player_id = int(hello["player_id"])
+
+	# [b]The server's tick rate, before anything is derived from it.[/b] HELLO has
+	# carried it since it was written and `read_hello` has always decoded it; nothing
+	# read it back out, so a client counted at its own project's
+	# `physics_ticks_per_second` — 128 in this repository, 60 in a host project that
+	# never set one — against a server counting at `sv_tickrate`. Produced correctly
+	# and consumed by nothing, which is this family's most repeated bug and is
+	# invisible to `headless_net` for the usual reason: one process has one engine
+	# rate, so both ends agreed no matter what the wire said.
+	#
+	# Before `sync_from_server`, because the clock converts its error and its lead
+	# through `tick_rate` and would otherwise do that arithmetic at the old rate.
+	_adopt_tick_rate(int(hello["tick_rate"]))
+
 	var rtt := float(rtt_source.call()) if rtt_source.is_valid() else 0.0
 	net.clock.sync_from_server(int(hello["server_tick"]), maxf(0.0, rtt))
 
@@ -672,6 +686,33 @@ func _apply_hello(reader: DotNetReader) -> void:
 		game.change_map(map_id)
 
 	hello_received.emit(local_player_id)
+
+
+## Puts the whole client — game, timers, netcode clock — on the server's tick rate.
+##
+## Three places hold this number and all three have to move together. `game.tick_rate`
+## is the step the simulation and every reconstituted run time use; `net.config.tick_rate`
+## is what `DotNetInput.sanitise` and the interpolator's extrapolation budget read; and
+## `net.clock.tick_rate` is the live one, built from the config back at `setup()` and
+## therefore NOT updated by writing the config alone.
+##
+## A server never calls this: its rate is `sv_tickrate` and adopting a peer's would be
+## a client telling the server how fast to run.
+func _adopt_tick_rate(rate: int) -> void:
+	if net == null or net.is_server or game == null or rate <= 0 or rate == game.tick_rate:
+		return
+
+	var before := game.tick_rate
+
+	if not game.set_tick_rate(rate):
+		return
+
+	net.config.tick_rate = game.tick_rate
+	net.clock.tick_rate = game.tick_rate
+
+	DotLog.info(CHANNEL, "adopted the server's tick rate", {
+		"was": before, "now": game.tick_rate,
+	})
 
 
 func _apply_movement(reader: DotNetReader) -> void:

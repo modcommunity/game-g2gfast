@@ -43,9 +43,35 @@ game/
   g2g_map.gd        base for the built-in maps
 maps/               bhop_g2g_intro, surf_g2g_intro, and their .zones.json
 avatars/            six stock parts and the tint shader
-examples/           headless_run (90), headless_net (76), dedicated (52)
+scenes/
+  g2g_server.tscn   what a dot-server loads. A G2GGame under a plain Node
+examples/           headless_run (91), headless_net (81), dedicated (52)
 tools/              export_zones.gd — run after changing a map
 ```
+
+**There is no `[input]` block in `project.godot`, and that is deliberate.** There was
+one — `player_forward`, `player_back`, `player_left`, `player_right`, `player_jump`,
+`player_crouch` — and nothing read any of them: [DotFpsSampler] keys off its own
+`actions` dictionary of `dot_fps_*` names and `register_default_actions` adds them to
+the [InputMap] at runtime for a project that has none. Six actions declared once and
+read nowhere, which is the family's own detector for a setting that does not exist.
+Removing them rather than wiring them up is what makes this game's client work
+**inside another project**: it now ships in dot-server-setup-test's browser shell,
+whose `project.godot` has no input actions at all, and a game that depended on its own
+would have had no controls there.
+
+The keys are therefore the sampler's defaults. Duck is **Ctrl**, not Shift — the
+README said Shift for as long as the dead block did, and neither was ever true.
+
+## Where this game runs, besides here
+
+`dot-server-setup-test` vendors it: `setup.sh` copies `game/`, `scenes/`, `maps/` and
+`avatars/` into that project, `content/g2gfast/game.yml` points at
+`res://scenes/g2g_server.tscn` and `res://game/g2g_module.gd`, and the browser shell
+maps content id `g2gfast` to `res://game/g2g.tscn`. That is the deployment shape — a
+separate process, a real socket, a browser — and by this family's repeated lesson it is
+where the bugs are. It found four; two of them are below and two were in other
+repositories.
 
 ## Decision 1: everything the operator touches is in genre units
 
@@ -136,7 +162,7 @@ refused: a player is never invisible because their hat is from the future.
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_run.tscn   # 91 checks
-godot --headless --path . res://examples/headless_net.tscn   # 76 checks
+godot --headless --path . res://examples/headless_net.tscn   # 81 checks
 godot --headless --path . res://examples/dedicated.tscn      # 52 checks
 ```
 
@@ -225,6 +251,110 @@ driven bots stopped hopping the moment the bridge started adopting them.
 `!r`, `!wr`, `!top`, `!style`, `!track`, `!rtv` are chat triggers as well as console
 commands, because twenty years of bhop servers taught everybody's fingers those.
 `g2g_map` is not: changing the map from chat is an admin's, through the console.
+
+## Decision 7: the client counts at the SERVER's tick rate
+
+`HELLO` carries `tick_rate` and always did. Nothing read it back out.
+
+`G2GGame._resolve_tick_rate` takes `Engine.physics_ticks_per_second`, which on a server
+is `sv_tickrate` and on a client is whatever the host project exported — 128 in this
+repository, **60 in dot-server-setup-test's browser shell, which never sets one**. So a
+client simulated at a rate the server did not, and three things are derived from that
+number: the step prediction replays with, the divisor every replicated run time is
+reconstituted through, and `DotNetClock`'s own rate.
+
+Measured, by putting `headless_net`'s client on 60 against its 128 server: **correction
+rate 0.96** — prediction never converging — and the client's clock reading a finish as
+0.466 s where the server filed 0.218 s, which is 128/60 of it. On a leaderboard that is
+every time on the board wrong by the ratio of two numbers nobody thought were related.
+
+`G2GNetBridge._adopt_tick_rate` now applies it before `sync_from_server`, because the
+clock converts its error and its input lead through `tick_rate`. All three copies move
+together: `G2GGame.set_tick_rate` (which takes the timer manager with it and reads the
+rate back rather than assigning it), `net.config.tick_rate`, and `net.clock.tick_rate`
+— the last one being a copy taken at `setup()` that writing the config does not touch.
+
+**`headless_net` could not have found this and now can.** Both halves run in one
+process, so they read one `Engine.physics_ticks_per_second` and agreed no matter what
+the wire said; the check that asserted "at one tick rate" was passing for that reason
+rather than for a good one. The suite now puts the client on 60 deliberately, the way a
+host project would, and asserts that HELLO is what corrects it.
+
+The same shape found two more, both only visible in a browser:
+
+- **A client's own configuration was invalid.** `G2GClient` clears `initial_map` when it
+  is networked — correct, the server decides — and `G2GConfig.validate()` refused an
+  empty one unconditionally, so `load_layered` failed and every networked client logged
+  "the g2gfast configuration is not usable". Only an authoritative instance chooses a
+  map.
+- **dot-timer warned every client that its times would be wrong.** The rate/engine
+  mismatch warning is real on a server and meaningless on a mirroring timer, which
+  counts at the rate it was told precisely so a run set at 128 is comparable on a client
+  rendering at 60. It is now guarded on `authoritative`.
+
+## Decision 9: the local player is adopted, not looked up
+
+`HELLO` says who you are. `JOIN` is what creates you — `G2GNetBridge._apply_join` calls
+`game.add_player` — and it arrives afterwards. So `G2GClient._watch`, called from
+`hello_received`, resolved `game.players.get(id)` **one message too early**, got null,
+and never tried again: [member G2GClient.player] was null for the entire session on
+every networked client.
+
+**What that broke is a strange list, and the strangeness is the point.** The HUD binds by
+id, so it worked. The camera follows the entity, so it worked. Movement worked, because
+`DotFpsSampler.sample` polls the [InputMap] rather than reading events. What did not work
+was everything below the `player == null` guard in `_unhandled_input` — **mouse look, F5,
+Tab, R, C, V and M**. A client that connects, draws, shows a live HUD and walks around,
+on which the mouse and the whole keyboard do nothing.
+
+`_on_player_added` is the fix: connect [signal G2GGame.player_added] before anything can
+create a player, keep the id in `_watch_id`, and adopt when the player named by it
+appears. `_adopt` is also where the sampler is put on the player's tunables, which
+`_on_hello` used to attempt against the null it had just fetched.
+
+`headless_net` drives two bridges directly and never instantiates `G2GClient`, so nothing
+in the suite had been through this. It now asserts the ordering the bug lived in — that
+the local player does **not** exist when HELLO names it, and that `player_added` fires for
+it — which is what a client has to be written against.
+
+**How it was actually confirmed.** Not by a test: Playwright cannot move a pointer-locked
+mouse — `movementX`/`movementY` come through as `0` on every synthetic event — so the
+symptom the player reported is not directly reproducible in the harness. F5 is, and it
+sits in the same `match` under the same guard: press it, screenshot, and third person is
+either drawn or it is not. *When the thing you want to test is unreachable, test the
+thing beside it that shares the failure.*
+
+## Decision 8: the browser is asked for the mouse, not told
+
+`G2GClient._ready()` set `Input.mouse_mode = MOUSE_MODE_CAPTURED`, which is right on a
+desktop and impossible in a browser: pointer lock needs **transient user activation** —
+a real click — and `_ready()` is the one moment in a client's life guaranteed not to
+have one.
+
+It is refused *silently*. `Input.mouse_mode` reads back as CAPTURED, the view still
+turns with the mouse, and nothing anywhere reports a problem; what the player gets is a
+cursor sitting on top of the game that wanders out of the window mid-run.
+
+**This is the family's deployment-shape rule on a capability nothing had needed yet.**
+game-hungario is the only other browser client in the family and it is 2D — it reads the
+cursor's position and never locks it — so g2gfast is the first thing here that has ever
+asked a browser for pointer lock, and the first place this could have been found.
+
+- Desktop captures immediately. A player who launched a first-person game should not
+  have to click their own window first.
+- Web shows the cursor, says "Click to play" on the HUD, and captures on the first
+  mouse-button press. That press is handled *before* the `player == null` guard, because
+  a browser player clicks while the world is still loading more often than not, and a
+  click swallowed for want of a player is a click that never captures anything.
+- Escape **releases** and does not toggle, on both platforms. Escape is how a browser
+  itself exits pointer lock and it then refuses to re-enter for about a second, so a
+  toggle bound to it silently does nothing every other press on the web. One key that
+  releases and one gesture that captures is the same contract everywhere — and it is
+  what this file's own class documentation had claimed all along while the code toggled.
+
+Verified with a real click in headless Chromium: `document.pointerLockElement` is null
+before and set after. `tools/browser_check.mjs` never clicks, which is why nothing had
+exercised this.
 
 ## Things deliberately not here
 

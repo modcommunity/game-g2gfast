@@ -8,7 +8,9 @@ extends Node
 ##
 ## Keys: WASD, space (hold, if the server allows auto-bhop), shift to duck, Tab to
 ## cycle style, M for the next map, R to restart, C / V for practice checkpoints,
-## F5 to switch between first and third person, Esc to release the mouse.
+## F5 to switch between first and third person, Esc to release the mouse, click to
+## take it back — which is also how a browser player captures it in the first place,
+## because pointer lock needs a real user gesture. See [method _grab_mouse].
 
 const LINK_SERVICE := &"dot_client_link"
 
@@ -29,6 +31,15 @@ var _offline := true
 var _style_index := 0
 var _sampler: DotFpsSampler = null
 
+## Whether the cursor is waiting for a click before it can be captured. Web only.
+var _awaiting_click := false
+
+## Who [member player] should be, whether or not that player exists yet.
+##
+## See [method _watch]: on a networked client the id is known one message before the
+## player it names.
+var _watch_id: StringName = &""
+
 
 func _ready() -> void:
 	link = DotRegistry.get_node_service(LINK_SERVICE)
@@ -43,6 +54,10 @@ func _ready() -> void:
 	game.config = config
 	add_child(game)
 
+	# Connected before anything can create a player. `JOIN` is what creates the local
+	# one and it arrives after `HELLO` has already said who we are — see [method _watch].
+	game.player_added.connect(_on_player_added)
+
 	if _offline:
 		for _i in range(60):
 			await get_tree().process_frame
@@ -54,17 +69,90 @@ func _ready() -> void:
 		var netted := _build_netcode()
 		DotLog.result("g2g.client", "netcode", netted)
 
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_grab_mouse()
 	set_process(true)
 
 
+## Hides and captures the cursor, or arranges for a click to do it.
+##
+## [b]A browser will not hide the cursor because a scene asked it to.[/b] Pointer lock
+## needs transient user activation — a real click — and `_ready()` is the one moment in
+## a client's life that is guaranteed not to have one. The request is refused, and it is
+## refused SILENTLY: `Input.mouse_mode` reads back as CAPTURED, the cursor stays on
+## screen, and the view still turns, so nothing anywhere reports a problem. What the
+## player gets is a mouse that leaves the window mid-run.
+##
+## This is the family's own rule about deployment shapes, on a capability nothing had
+## needed yet: game-hungario is the only other browser client and it is 2D — it reads
+## the cursor's position and never locks it — so g2gfast is the first thing here that
+## has ever asked a browser for pointer lock.
+##
+## Desktop has no such rule and captures immediately, because a player who launched a
+## first-person game should not have to click their own window first.
+func _grab_mouse() -> void:
+	if not DotPlatform.is_web():
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		return
+
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_awaiting_click = true
+	_say_click_to_play()
+
+
+## Tells the player the one thing they have to do, once there is a HUD to say it on.
+##
+## `_ready()` builds the HUD only on the offline path; a networked client gets one when
+## the server says who it is, which is several hundred milliseconds later. Saying it in
+## both places rather than once is why this is a function.
+func _say_click_to_play() -> void:
+	if _awaiting_click and hud != null:
+		hud.notice("Click to play")
+
+
+## Follows a player: the camera, the HUD, and everything the keys act on.
+##
+## [b]The id arrives one message before the player does.[/b] `HELLO` says who you are and
+## `JOIN` is what creates you — `G2GNetBridge._apply_join` calls `game.add_player` — so a
+## networked client that resolved [member player] here and never again held null for the
+## whole session. Nothing errored: the HUD binds by id and worked, movement is polled
+## from the [InputMap] by `DotFpsSampler.sample` and worked, and the camera follows the
+## entity rather than this reference. What did not work was every line below the
+## `player == null` guard in [method _unhandled_input] — which is mouse look, F5, Tab, R,
+## C, V and M. **The whole keyboard and the whole mouse, on a client that otherwise
+## looked fine.**
+##
+## `headless_net` never instantiates this class — it drives two bridges directly — so
+## nothing in the suite had ever been through this path.
 func _watch(id: StringName) -> void:
-	player = game.players.get(id)
+	_watch_id = id
+	_adopt(game.players.get(id))
+
 	if hud == null:
 		hud = G2GHud.new()
 		hud.name = "Hud"
 		add_child(hud)
 	hud.bind(game, id)
+	_say_click_to_play()
+
+
+## The player we are waiting for has been created. Fires for every player; ours is one.
+func _on_player_added(added: G2GPlayer) -> void:
+	if player == null and added != null and added.player_id == _watch_id:
+		_adopt(added)
+
+
+func _adopt(candidate: G2GPlayer) -> void:
+	if candidate == null:
+		return
+
+	player = candidate
+
+	# The sampler turns the view at the rate this player's style says, and until there
+	# is a player to ask it is on the game's own tunables. Done here rather than in
+	# `_on_hello` for the same reason as everything else in this function: at hello
+	# there is nobody to ask.
+	if _sampler != null:
+		_sampler.tunables = player.controller.tunables
 
 
 func _build_netcode() -> DotResult:
@@ -125,8 +213,6 @@ func _build_netcode() -> DotResult:
 
 func _on_hello(player_id: int) -> void:
 	_watch(StringName("u%d" % player_id))
-	if player != null:
-		_sampler.tunables = player.controller.tunables
 	# The server dressed us from dot-platform's admission if it could; a launcher
 	# that resolved one locally through DotAvatarManager sets [member avatar] and it
 	# goes up now, to be conformed against the server's schema like any other.
@@ -153,6 +239,18 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# [b]Before the `player == null` guard, deliberately.[/b] A browser player clicks
+	# while the world is still loading more often than not, and a click swallowed
+	# because no player exists yet is a click that never captures the cursor — after
+	# which the only affordance the game offers is one it has already ignored.
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+			_awaiting_click = false
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			if hud != null:
+				hud.notice("")
+			return
+
 	if player == null:
 		return
 
@@ -203,7 +301,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				player.controller.state.velocity = cp.velocity
 				player.controller.state.pitch = cp.pitch
 		KEY_ESCAPE:
-			Input.mouse_mode = (
-				Input.MOUSE_MODE_VISIBLE if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
-				else Input.MOUSE_MODE_CAPTURED
-			)
+			# [b]Release only, and a click is the way back.[/b] Escape is how a browser
+			# itself exits pointer lock, and it then refuses to re-enter it for about a
+			# second afterwards — so a toggle bound to Escape works on the desktop and,
+			# on the web, silently does nothing every other press. One key that releases
+			# and one gesture that captures is the same contract on both.
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+			if DotPlatform.is_web():
+				_awaiting_click = true
+				_say_click_to_play()

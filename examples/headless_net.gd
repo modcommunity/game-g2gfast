@@ -15,6 +15,10 @@ const SESSION := 7
 const INPUT_LEAD := 2
 const SNAPSHOT_RATE := 32
 
+## What the client's engine is pretending to run at, and deliberately not the
+## server's. See the note in [method _build].
+const CLIENT_ENGINE_TICK_RATE := 60
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
@@ -198,7 +202,25 @@ func _build() -> bool:
 			break
 
 	_check(_server_game.maps.current != null and _client_game.maps.current != null, "both games load the map")
-	_check(_server_game.tick_rate == _client_game.tick_rate, "at one tick rate")
+	_check(_server_game.tick_rate == _client_game.tick_rate, "at one tick rate, because one process has one engine rate")
+
+	# [b]And that is exactly why this suite could not see the tick rate bug.[/b] Both
+	# halves read `Engine.physics_ticks_per_second`, so they agreed no matter what the
+	# wire carried — while a real client is a separate process whose rate is its own
+	# project's export and has nothing to do with the server's `sv_tickrate`. The
+	# client shell in dot-server-setup-test never sets one at all and runs at 60.
+	#
+	# So put the client on a rate the server is not on, the way a host project would,
+	# and let HELLO be what corrects it. Every check after this one is then running
+	# against a client that had to adopt rather than one that happened to match.
+	_check(
+		_client_game.set_tick_rate(CLIENT_ENGINE_TICK_RATE),
+		"the client is put on %d, as a host project with its own export would be" % CLIENT_ENGINE_TICK_RATE
+	)
+	_check(
+		_client_game.tick_rate != _server_game.tick_rate,
+		"so the two now disagree", "%d vs %d" % [_client_game.tick_rate, _server_game.tick_rate]
+	)
 
 	_server_net = _make_manager(true, &"server", 1, server_side, _server_game.tick_rate)
 	_client_net = _make_manager(false, &"client", CLIENT_PEER, client_side, _client_game.tick_rate)
@@ -305,7 +327,23 @@ func _test_handshake() -> void:
 	_section("a client joins")
 
 	var hellos := []
-	_client_bridge.hello_received.connect(func(id: int) -> void: hellos.append(id))
+	# [b]Whether the local player exists at the moment HELLO says who you are.[/b] It does
+	# not — `_apply_join` is what calls `game.add_player` — and a client that resolved its
+	# own player on `hello_received` therefore held null for the whole session. G2GClient
+	# did exactly that, and the symptom was the entire keyboard and mouse dead on a client
+	# whose HUD, movement and camera all worked: everything below its `player == null`
+	# guard is mouse look and the keybinds, while movement is polled from the InputMap and
+	# never touches it.
+	#
+	# Captured in the handler rather than checked afterwards, because by the time the
+	# exchange returns JOIN has been applied and the answer is yes either way.
+	var local_at_hello := []
+	var added_locally: Array[StringName] = []
+	_client_game.player_added.connect(func(p: G2GPlayer) -> void: added_locally.append(p.player_id))
+	_client_bridge.hello_received.connect(func(id: int) -> void:
+		hellos.append(id)
+		local_at_hello.append(_client_game.players.has(StringName("u%d" % id)))
+	)
 
 	var added := _server_bridge.add_player(CLIENT_PEER, SESSION, "Ada")
 	_check(added.ok, "the server adds the player", str(added.error) if not added.ok else "")
@@ -320,6 +358,39 @@ func _test_handshake() -> void:
 	_check(_server_net.peers().has(CLIENT_PEER), "asking admits them")
 	_check(hellos == [SESSION], "and the client is told who it is", str(hellos))
 	_check(_client_bridge.local_player_id == SESSION, "which the bridge remembers")
+
+	# HELLO has carried the server's tick rate since it was written and `read_hello`
+	# has always decoded it; until this was fixed, nothing read it back out. All three
+	# have to move: the game's rate is the step prediction replays with and the
+	# divisor every replicated run time is reconstituted through, the net config's is
+	# what input sanitising and the extrapolation budget read, and the CLOCK's is a
+	# copy taken at setup() that writing the config does not touch.
+	_check(
+		_client_game.tick_rate == _server_game.tick_rate,
+		"and the client adopts the server's tick rate from HELLO",
+		"%d vs %d" % [_client_game.tick_rate, _server_game.tick_rate]
+	)
+	_check(
+		_client_game.timers.tick_rate == _server_game.tick_rate,
+		"its timers with it, or every run time is wrong by the ratio",
+		"%d vs %d" % [_client_game.timers.tick_rate, _server_game.tick_rate]
+	)
+	_check(
+		_client_net.clock.tick_rate == _server_game.tick_rate
+			and _client_net.config.tick_rate == _server_game.tick_rate,
+		"and so does the netcode clock, which is a copy taken at setup()",
+		"clock %d, config %d" % [_client_net.clock.tick_rate, _client_net.config.tick_rate]
+	)
+	_check(
+		local_at_hello == [false],
+		"the local player does NOT exist yet when HELLO names it — JOIN is what creates it",
+		str(local_at_hello)
+	)
+	_check(
+		added_locally.has(StringName("u%d" % SESSION)),
+		"so `player_added` is the hook a client has to follow, and it fires for the local one",
+		str(added_locally)
+	)
 	_check(_client_player() != null and _client_player().samples_input, "the client mirrors itself as the local player")
 	_check(_client_player() != null and _client_player().sampler == null, "which the bridge drives rather than the devices")
 	_check(_client_game.tunables.fingerprint() == _server_game.tunables.fingerprint(), "with the server's movement")
