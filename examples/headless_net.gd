@@ -222,6 +222,19 @@ func _build() -> bool:
 		"so the two now disagree", "%d vs %d" % [_client_game.tick_rate, _server_game.tick_rate]
 	)
 
+	# [b]The ENGINE too, or the check below passes for the wrong reason.[/b] Both halves
+	# share one process and this project exports 128, so an assertion that the engine
+	# ends up on the server's rate would hold whether or not anything ever set it — the
+	# same "agrees versus was never asked to disagree" trap that let the original tick
+	# rate bug live here. The browser shell genuinely runs at 60, so put the engine
+	# there and make HELLO be what moves it.
+	Engine.physics_ticks_per_second = CLIENT_ENGINE_TICK_RATE
+	_check(
+		Engine.physics_ticks_per_second != _server_game.tick_rate,
+		"and so does the engine, which is what a browser shell that sets none runs at",
+		"engine %d vs server %d" % [Engine.physics_ticks_per_second, _server_game.tick_rate]
+	)
+
 	_server_net = _make_manager(true, &"server", 1, server_side, _server_game.tick_rate)
 	_client_net = _make_manager(false, &"client", CLIENT_PEER, client_side, _client_game.tick_rate)
 
@@ -380,6 +393,20 @@ func _test_handshake() -> void:
 			and _client_net.config.tick_rate == _server_game.tick_rate,
 		"and so does the netcode clock, which is a copy taken at setup()",
 		"clock %d, config %d" % [_client_net.clock.tick_rate, _client_net.config.tick_rate]
+	)
+	# [b]And the ENGINE's, which is the half that decides whether it looks smooth.[/b]
+	# The three rates above make the simulation correct; this one makes it drawable.
+	# `G2GClient._physics_process` asks the clock how many ticks a frame is worth, so a
+	# client on a 60 Hz engine against a 128-tick server simulated the right number of
+	# ticks — in bursts of two and three. Nothing renders between ticks, so the camera
+	# advanced 74 mm on six frames out of seven and 112 mm on the seventh: a 47% change
+	# in apparent speed, eight times a second. Interpolation cannot fix it on its own,
+	# because a fraction through a PHYSICS frame is only a fraction through a tick while
+	# the two rates agree. `examples/jitter_probe.tscn` measures all four combinations.
+	_check(
+		Engine.physics_ticks_per_second == _server_game.tick_rate,
+		"and the ENGINE, so one physics frame is one tick and a renderer can interpolate",
+		"engine %d vs server %d" % [Engine.physics_ticks_per_second, _server_game.tick_rate]
 	)
 	_check(
 		local_at_hello == [false],

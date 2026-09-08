@@ -710,8 +710,28 @@ func _adopt_tick_rate(rate: int) -> void:
 	net.config.tick_rate = game.tick_rate
 	net.clock.tick_rate = game.tick_rate
 
+	# [b]And the engine's, which is the half that decides whether it looks smooth.[/b]
+	# `G2GClient._physics_process` asks the clock how many ticks a frame is worth, so
+	# the simulation was already correct with the engine left at 60 — it just ran them
+	# in bursts of two and three. Nothing renders between ticks, so the camera moved
+	# 74 mm on six frames out of seven and 112 mm on the seventh: a 47% change in
+	# apparent speed, eight times a second, for as long as a browser client has
+	# existed. That is the "very jittery in the browser" report.
+	#
+	# Interpolating fixes it and cannot be done without this line.
+	# `DotFpsController.render_state` and `DotNetManager.interpolate_frame` both draw
+	# at `Engine.get_physics_interpolation_fraction()`, which is a fraction through a
+	# PHYSICS frame — only a fraction through a tick while the two rates are the same.
+	# Measured at 60-against-128 the interpolation changes nothing at all; measured
+	# with both on 128 the drawn step is uniform to within 0.3 mm. See
+	# `examples/jitter_probe.tscn`, which runs all four combinations.
+	#
+	# A server is already excluded above: its rate is `sv_tickrate` and dot-server
+	# writes this itself.
+	Engine.physics_ticks_per_second = game.tick_rate
+
 	DotLog.info(CHANNEL, "adopted the server's tick rate", {
-		"was": before, "now": game.tick_rate,
+		"was": before, "now": game.tick_rate, "engine": Engine.physics_ticks_per_second,
 	})
 
 

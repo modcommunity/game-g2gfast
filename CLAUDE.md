@@ -156,15 +156,62 @@ same player is the same colour on every machine.
 quietly rewrite a player's own avatar. A part from a newer client is dropped, never
 refused: a player is never invisible because their hat is from the future.
 
+## The maps, and how they are textured
+
+Three of them now: `bhop_g2g_intro`, `surf_g2g_intro` and `bhop_g2g_stages`.
+
+**`bhop_g2g_stages` is the first one that is a map rather than a fixture.** The other
+two are a straight line of blocks and a pair of ramps: they prove the movement and there
+is one thing to do in each, once. It is the Counter-Strike staged shape — five sections
+with a line between each, one idea per section, so a player who fails knows which idea
+they failed:
+
+```
+1  straight    blocks in a line, gaps growing.      Keep the speed.
+2  the turn     the course bends 90 degrees.        Strafe through it.
+3  the climb    blocks rising 24 units each.        Height costs speed.
+4  the drop     a descent onto narrow blocks.       Do not overshoot.
+5  the zigzag   blocks alternating left and right.  Both directions.
+```
+
+Everything is derived from `_course()`, which walks a position and a heading and returns
+every block; the geometry and the zones both read that one list. On a map that *turns*
+that is not a nicety — a hand-placed stage line on a course whose gaps somebody later
+changes is a leaderboard nobody can compare, and nothing reports it: the run still
+finishes, the splits are just taken somewhere else.
+
+Its bonus is a **surf** descent on a bhop map, deliberately. A bonus track is a whole
+second route with its own records, and making it the same thing as the main route wastes
+it; it is also the cheapest proof that a track is a route and not a game mode.
+
+**Every stage zone carries a `destination`**, through `G2GMap.zone_stage`, because
+dot-timer's `request_stage` hands the host the zone's destination and one drawn without
+it resolves to `Vector3.ZERO` — a point in the sky over the start, reached with no error
+at all.
+
+**Surfaces are roles, not colours.** `G2GGeometry.box` used to take a `Color` and set a
+flat `albedo_color`, so every surface in the game was one unbroken tone — which in this
+genre is not cosmetic. A surf ramp is a plane ridden at 30 m/s and a bhop block is one
+cleared in eight ticks, and both are judged by *how fast the surface is going past*; the
+only cue for that is a repeating pattern with a known size. `G2GTextures` supplies one,
+triplanar and in **world** space, so one square is 64 units — the grid this genre's maps
+are built on — on every surface whatever its size. The old `COLOUR_*` constants are role
+ids now and keep their names, so no map file changed.
+
 ## Validating
 
 ```bash
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_run.tscn   # 91 checks
-godot --headless --path . res://examples/headless_net.tscn   # 81 checks
+godot --headless --path . res://examples/headless_net.tscn   # 85 checks
 godot --headless --path . res://examples/dedicated.tscn      # 52 checks
+godot --headless --path . res://examples/jitter_probe.tscn   # 4 configurations
 ```
+
+`jitter_probe` is the only one that measures a **rendered frame** rather than a
+simulated tick, which is the whole class of bug the others cannot reach. See
+Decision 10.
 
 **Two checks in `headless_run` were measuring the wrong thing and only stopped when
 dot-timer was fixed.** `DotTimer.effect_requested` was emitted by nothing, so this
@@ -324,6 +371,55 @@ sits in the same `match` under the same guard: press it, screenshot, and third p
 either drawn or it is not. *When the thing you want to test is unreachable, test the
 thing beside it that shares the failure.*
 
+## Decision 10: the client draws BETWEEN ticks, and the engine runs at the server's rate
+
+Reported as "very jittery in the browser", and every number in every suite was right.
+
+The simulation was already correct. `G2GClient._physics_process` asks
+`DotNetClock.advance` how many ticks a frame is worth, so a client on a 60 Hz engine
+against a 128-tick server ran exactly the right ticks — **in bursts of two and three**,
+2.133 of them per physics frame. Nothing rendered between ticks: `G2GPlayer.present`
+drew `controller.state` directly, so the camera advanced 74 mm on six frames out of
+seven and 112 mm on the seventh. **A 47% change in apparent speed, eight times a
+second**, for as long as a browser client has existed.
+
+Two halves, and **either one alone measures as no better than doing nothing**:
+
+- **`DotFpsController.render_state` exists and nothing called it.** It has interpolated
+  between the last two ticks since the controller was written, and its guard was
+  `if drive != Drive.LOCAL: return state` — LOCAL being the one drive no networked game
+  uses. So the cure was written, documented as the cure, and unreachable from every
+  deployment shape that needed it. `_accumulator` is never advanced under EXTERNAL
+  either, so even reaching it would have blended at a constant alpha of zero.
+- **`_adopt_tick_rate` moved three copies of the tick rate and not the engine's.** The
+  fraction a renderer interpolates at is a fraction through a *physics frame*, which is
+  only a fraction through a tick while the two rates agree. At 60-against-128 the
+  interpolation changes nothing measurable.
+
+`examples/jitter_probe.tscn` runs all four combinations and fails unless exactly the
+shipped one is smooth — because a probe that only tested the fix would have passed for
+either half on its own.
+
+| | drawn at the last tick | drawn between ticks |
+| --- | --- | --- |
+| **engine 60** | 47% spread | 47% spread |
+| **engine 128** | 47% spread | **0%** |
+
+**View angles are deliberately still not interpolated**, and they never juddered: mouse
+motion is delivered once per frame and `DotFpsSampler.sample` consumes everything
+pending, so whichever tick runs next absorbs exactly that frame's motion and the yaw
+tracks the mouse per frame however many ticks ran. Blending it would add a tick of
+latency to aiming to fix nothing.
+
+The cost is real and worth naming: a browser client now steps Godot's physics 128 times
+a second instead of 60. The work inside the tick is unchanged — the clock was already
+producing 128 ticks a second — so what is added is the engine's own physics step, which
+for a world of static geometry and one query-driven controller is close to free.
+
+**Nothing headless could see any of this**, which is why it survived every suite:
+every check in this repository asserts a simulated value, and every simulated value was
+correct. `jitter_probe` is the first thing here that samples what a *frame* shows.
+
 ## Decision 8: the browser is asked for the mouse, not told
 
 `G2GClient._ready()` set `Input.mouse_mode = MOUSE_MODE_CAPTURED`, which is right on a
@@ -362,5 +458,8 @@ exercised this.
   `MultiplayerAPI`; browser and desktop clients on one server is the family-wide gap
   in PLATFORM.md.
 - **Props.** This is the timer server. game-playground has the sandbox.
-- **Real maps.** These two are fixtures that happen to be playable, built in units so a
-  mapper can read them.
+- **A texture set.** `G2GTextures` generates a prototype grid and looks for an
+  installed one in `res://textures/prototype/{floor,ramp,start,end,platform,bonus}.png`.
+  Kenney's prototype kit is CC0 and is what those files are for; dropping them in
+  changes every map in the game with no code change, because `G2GGeometry.box` takes a
+  ROLE rather than a colour and the roles are the whole interface.

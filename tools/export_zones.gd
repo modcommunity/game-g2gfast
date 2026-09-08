@@ -9,7 +9,7 @@ extends SceneTree
 
 func _init() -> void:
 	var failures := 0
-	for id in ["bhop_g2g_intro", "surf_g2g_intro"]:
+	for id in ["bhop_g2g_intro", "surf_g2g_intro", "bhop_g2g_stages"]:
 		var script: GDScript = load("res://maps/%s.gd" % id)
 		var zones: DotTimerZoneSet = script.build_zones()
 		var path := "res://maps/%s.zones.json" % id

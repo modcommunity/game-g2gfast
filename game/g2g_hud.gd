@@ -11,6 +11,7 @@ var timer_hud: DotTimerHud = null
 var _keys: Label = null
 var _status: Label = null
 var _notice: Label = null
+var _crosshair: DotCrosshair = null
 var _notice_until: float = 0.0
 
 var game: G2GGame = null
@@ -27,24 +28,80 @@ func _ready() -> void:
 	offset_bottom = 0.0
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+	# THE WHOLE RECT, not a box in the corner.
+	#
+	# `DotTimerHud` places its own block in a corner of whatever rect it is given, so
+	# the rect is the AREA it lays out inside rather than the block. Handing it the
+	# 360 x 200 it used to have would pin an overlay to the corner of a box in the
+	# corner, which is the thing being fixed.
 	timer_hud = DotTimerHud.new()
 	timer_hud.name = "Timer"
-	timer_hud.position = Vector2(24.0, 24.0)
-	timer_hud.size = Vector2(360.0, 200.0)
-	timer_hud.show_speed = false
+	timer_hud.set_anchors_preset(Control.PRESET_FULL_RECT)
+	timer_hud.offset_left = 0.0
+	timer_hud.offset_top = 0.0
+	timer_hud.offset_right = 0.0
+	timer_hud.offset_bottom = 0.0
+	timer_hud.corner = DotTimerHud.Placement.BOTTOM_CENTRE
+	timer_hud.margin = Vector2(24.0, 92.0)
 	timer_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(timer_hud)
 
-	_keys = _label("Keys", Vector2(24.0, 240.0))
-	_status = _label("Status", Vector2(24.0, 276.0))
-	_notice = _label("Notice", Vector2(24.0, 312.0))
+	# The key display, directly under the clock, which is where every bhop stream in
+	# this genre has had it for fifteen years. Centred rather than left-aligned so it
+	# reads as part of the same block; monospaced-by-padding, because a proportional
+	# font makes the four keys jump sideways as they light up.
+	_keys = _label("Keys", HORIZONTAL_ALIGNMENT_CENTER)
+	_keys.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	_keys.offset_left = 0.0
+	_keys.offset_right = 0.0
+	_keys.offset_top = -80.0
+	_keys.offset_bottom = -52.0
+
+	# Reference rather than gameplay: the map, the track, the time limit, the rules
+	# in force. Along the top, out of the way of both the crosshair and the clock.
+	_status = _label("Status", HORIZONTAL_ALIGNMENT_CENTER)
+	_status.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	_status.offset_left = 0.0
+	_status.offset_right = 0.0
+	_status.offset_top = 14.0
+	_status.offset_bottom = 40.0
+	_status.modulate = Color(1.0, 1.0, 1.0, 0.62)
+
+	# A crosshair, which this game did not have.
+	#
+	# It was survivable while the HUD was a column of text down the left: there was
+	# something to look at. With the clock moved under the centre there is nothing at
+	# all in the middle of the screen, and a first-person game with an empty centre
+	# reads as broken rather than as clean. dot-ui draws one rather than shipping art,
+	# which is why it can be used here without an asset.
+	_crosshair = DotCrosshair.new()
+	_crosshair.name = "Crosshair"
+	_crosshair.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_crosshair.offset_left = 0.0
+	_crosshair.offset_top = 0.0
+	_crosshair.offset_right = 0.0
+	_crosshair.offset_bottom = 0.0
+	_crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_crosshair)
+
+	# Things that just happened: a finish, a rank, a map change, a cvar an admin
+	# moved. Above the clock, where a player's eye already is.
+	_notice = _label("Notice", HORIZONTAL_ALIGNMENT_CENTER)
+	_notice.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_notice.offset_left = -600.0
+	_notice.offset_right = 600.0
+	_notice.offset_top = -160.0
+	_notice.offset_bottom = -134.0
 
 
-func _label(p_name: String, at: Vector2) -> Label:
+func _label(p_name: String, align: int = HORIZONTAL_ALIGNMENT_LEFT) -> Label:
 	var label := Label.new()
 	label.name = p_name
-	label.position = at
-	label.size = Vector2(800.0, 32.0)
+	label.horizontal_alignment = align
+	# `set_anchors_preset` does NOT set offsets — every caller above sets its own four
+	# — and a Label that never got them keeps the zero size it was created with while
+	# every one of its properties reads correctly. This family has shipped that twice.
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(label)
 	return label
 
@@ -65,6 +122,43 @@ func bind(p_game: G2GGame, p_player: StringName) -> void:
 		func(id: StringName, number: int, split: float) -> void:
 			if id == player_id:
 				notice("Stage %d — %s" % [number, DotTimerRun.format_time(split)])
+	)
+
+	# How many stages this map's track has, and the player's own best split at each,
+	# so the clock block can say "Stage 2 / 5  -0.42" rather than only "Stage 2".
+	#
+	# Refreshed on a map change and on a filed run, which are the only two things that
+	# change either — NOT per frame. `stage_splits_for` goes to the store, and a store
+	# is a database handle behind an interface written to be asynchronous; asking it
+	# 128 times a second for a number that changes twice an hour is the cost this HUD
+	# would never notice locally and a server would.
+	game.map_ready.connect(func(_map: DotMapDef) -> void: refresh_stage_reference())
+	game.run_filed.connect(
+		func(id: StringName, _run: DotTimerRun, _rank: int, _reason: String) -> void:
+			if id == player_id:
+				refresh_stage_reference()
+	)
+
+	refresh_stage_reference()
+
+
+## Re-reads what the stage line counts and compares against.
+##
+## Public because a net bridge changes the track under the HUD — a player pressing T
+## for the bonus is on a different track with a different stage count — and there is
+## no signal for that.
+func refresh_stage_reference() -> void:
+	if game == null or game.timers == null:
+		return
+
+	var timer := game.timers.timer_for(player_id)
+
+	if timer == null:
+		timer_hud.set_stage_reference(0, {})
+		return
+
+	timer_hud.set_stage_reference(
+		game.timers.stage_count(timer.track), game.timers.stage_splits_for(player_id)
 	)
 
 
@@ -96,19 +190,22 @@ func _process(_delta: float) -> void:
 	var move := cmd.move if cmd != null else Vector2.ZERO
 	var buttons := cmd.buttons if cmd != null else 0
 
-	_keys.text = "%s %s %s %s   %s %s     %s u/s" % [
+	# The speed is NOT repeated here. `DotTimerHud` draws it in the block this line
+	# sits under, and the same number twice, six pixels apart, in two different
+	# formats, is the shape the old layout had.
+	_keys.text = "%s %s %s %s    %s  %s" % [
 		"W" if move.y > 0.1 else "·",
 		"A" if move.x < -0.1 else "·",
 		"S" if move.y < -0.1 else "·",
 		"D" if move.x > 0.1 else "·",
 		"JUMP" if buttons & DotFpsCommand.BUTTON_JUMP else "····",
 		"DUCK" if buttons & DotFpsCommand.BUTTON_CROUCH else "····",
-		G2GUnits.format_speed(player.speed()),
 	]
 
+	# The track is not repeated here either — `DotTimerHud` draws it beside the style,
+	# where a player reads the two together.
 	var parts := PackedStringArray([
 		game.maps.current.name_or_id() if game.maps.current != null else "-",
-		DotTimerTrack.name_of(player.timer.track) if player.timer != null else "-",
 		game.maps.time_limit.formatted_remaining(),
 		"autobhop %s" % ("on" if game.config.auto_bhop else "off"),
 		player.camera.describe()["mode"] if player.camera != null else "",

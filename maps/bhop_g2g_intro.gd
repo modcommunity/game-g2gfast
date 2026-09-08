@@ -104,13 +104,20 @@ static func build_zones() -> DotTimerZoneSet:
 
 	# Stages on blocks 5, 10 and 14, spanning the block so a fast player cannot pass
 	# through the line between two ticks.
+	#
+	# Each carries the spot `!s<n>` puts a player: the block the stage line is drawn
+	# on, a little above it. Without a destination the request succeeds and drops them
+	# at the world origin, which on this map is in the sky over the start pad.
 	var stage_blocks := [5, 10, 14]
 	for i in range(stage_blocks.size()):
 		var bz := block_z(stage_blocks[i])
-		var stage := zone_box(DotTimerZone.Kind.STAGE, main,
-			Vector3(-96.0, FLOOR_Y, bz - BLOCK_LENGTH), Vector3(96.0, FLOOR_Y + 128.0, bz))
-		stage.number = float(i + 1)
-		zones.add(stage)
+		zones.add(zone_stage(
+			main, i + 1,
+			Vector3(-96.0, FLOOR_Y, bz - BLOCK_LENGTH),
+			Vector3(96.0, FLOOR_Y + 128.0, bz),
+			Vector3(0.0, FLOOR_Y + 8.0, bz - BLOCK_LENGTH * 0.5),
+			180.0
+		))
 
 	zones.add(zone_box(DotTimerZone.Kind.RESPAWN, main,
 		Vector3(-4096.0, FLOOR_Y - 1024.0, finish_z - 4096.0),

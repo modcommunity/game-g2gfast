@@ -228,11 +228,38 @@ func fill_sample(sample: DotTimerSample) -> void:
 # --- Drawing ---------------------------------------------------------------
 
 ## Draws the state. Per frame, from the client, never from the tick.
+##
+## [b]The player we drive is drawn BETWEEN ticks, not on them.[/b] The simulation
+## steps at [code]sv_tickrate[/code] and the screen does not, so drawing
+## [code]controller.state[/code] directly quantises every motion — the camera, the
+## eye, the body — to the tick rate. At the browser's 60 frames against a 128-tick
+## server that is 2.133 ticks a frame: six frames advance two ticks and the seventh
+## advances three, so the view moves 74 mm, 74, 74, 74, 74, 74, 112 and starts over,
+## eight times a second. Measured, not reasoned about — see
+## [code]examples/jitter_probe.tscn[/code]. It is the whole of the "it is very
+## jittery in the browser" report, and it is why the run felt wrong while every
+## number on the HUD was right.
+##
+## [method DotFpsController.render_state] is the cure and has been there since the
+## controller was written; nothing called it. See its own note for the second half of
+## why — it refused every drive but the one no networked game uses.
+##
+## Only for a player this machine simulates. A remote player's position arrives
+## already interpolated by [DotNetInterpolator] through
+## [code]G2GPlayerNet._net_interpolated[/code], and its controller has no second tick
+## to blend from: [member has_camera] is the local player in both the offline and the
+## networked case, which is exactly the set that is simulated here.
 func present(delta: float) -> void:
-	var state := controller.state
+	var state := controller.render_state() if has_camera else controller.state
 
 	rig.set_crouch(state.crouch_fraction)
 	rig.global_basis = Basis(Vector3.UP, deg_to_rad(state.yaw))
+
+	# The rig hangs off this node, which only moves on a tick — so in third person the
+	# body would step even with a smooth camera. Written globally rather than by moving
+	# this node, because this node is the controller's body and the tick writes it.
+	if has_camera:
+		rig.global_position = state.position
 
 	if camera != null:
 		var eye := controller.motor.eye_position(state) if controller.motor != null else state.position

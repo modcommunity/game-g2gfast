@@ -62,6 +62,25 @@ static func zone_box(
 	)
 
 
+## A stage line, numbered from 1, with the spot a `!s<n>` puts a player.
+##
+## [b]The destination is not optional on a staged map.[/b] `DotTimerManager.request_stage`
+## resolves "go to stage 3" to a stage zone and hands the host that zone's
+## [member DotTimerZone.destination]; a stage zone drawn with none resolves to
+## [code]Vector3.ZERO[/code], which on any of these maps is a point in the sky above the
+## start. Nothing errors — the request succeeds and the player is dropped out of the
+## world — so the zone that has one and the zone that does not look identical
+## everywhere except in play.
+static func zone_stage(
+	track: int, number: int, a: Vector3, b: Vector3, at: Vector3, yaw: float = 0.0
+) -> DotTimerZone:
+	var zone := zone_box(DotTimerZone.Kind.STAGE, track, a, b)
+	zone.number = float(number)
+	zone.destination = G2GUnits.vector_to_metres(at)
+	zone.destination_yaw = yaw
+	return zone
+
+
 ## A spawn point from a position in genre units.
 static func zone_spawn(track: int, at: Vector3, yaw: float) -> DotTimerZone:
 	var zone := DotTimerZone.make(DotTimerZone.Kind.SPAWN, track)

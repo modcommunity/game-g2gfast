@@ -265,6 +265,7 @@ func _map_catalogue() -> DotMapCatalogue:
 	for row in [
 		[&"bhop_g2g_intro", "bhop: introduction", DotMapDef.KIND_BHOP, 2],
 		[&"surf_g2g_intro", "surf: introduction", DotMapDef.KIND_SURF, 3],
+		[&"bhop_g2g_stages", "bhop: five stages", DotMapDef.KIND_BHOP, 4],
 	]:
 		var map := DotMapDef.new()
 		map.id = row[0]

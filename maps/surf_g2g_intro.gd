@@ -85,14 +85,21 @@ static func build_zones() -> DotTimerZoneSet:
 	zones.add(zone_box(DotTimerZone.Kind.END, main,
 		Vector3(-384.0, END_Y, END_Z - 640.0), Vector3(384.0, END_Y + 512.0, END_Z - 128.0)))
 
+	# Each stage line carries where `!s<n>` puts a player: above the ramp mouth at
+	# that height, facing down the run. A surf stage restart is worth more than a bhop
+	# one — the alternative is riding the whole descent again to reach the section
+	# being learned — and it is the reason `restart_stage` exists at all.
 	for i in range(1, 3):
 		var t := float(i) / 3.0
 		var z := lerpf(START_Z, END_Z, t)
 		var y := lerpf(START_Y, END_Y, t)
-		var stage := zone_box(DotTimerZone.Kind.STAGE, main,
-			Vector3(-1200.0, y - 900.0, z - 96.0), Vector3(1200.0, y + 900.0, z + 96.0))
-		stage.number = float(i)
-		zones.add(stage)
+		zones.add(zone_stage(
+			main, i,
+			Vector3(-1200.0, y - 900.0, z - 96.0),
+			Vector3(1200.0, y + 900.0, z + 96.0),
+			Vector3(0.0, y + 192.0, z + 64.0),
+			180.0
+		))
 
 	zones.add(zone_box(DotTimerZone.Kind.RESPAWN, main,
 		Vector3(-16384.0, END_Y - 4096.0, END_Z - 16384.0),
