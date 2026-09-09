@@ -238,6 +238,31 @@ func _process(delta: float) -> void:
 		(game.players[id] as G2GPlayer).present(delta)
 
 
+## Set by a headless suite to answer [method mouse_drives_view] without a display
+## server. Left null in play, where the real mouse mode is the only honest answer.
+var mouse_capture_override: Variant = null
+
+
+## Whether the pointer is currently a look input rather than a pointer.
+##
+## [b]Only while the cursor is actually captured.[/b] KEY_ESCAPE releases it, and on the
+## web [member _awaiting_click] leaves it released before the first click too — in both
+## of those states the pointer is a pointer, so spending its motion on the view turns
+## the player away from the "click to play" notice they are being asked to click.
+## `game-arena` guarded this from the start; this file and `game-playground` did not.
+##
+## [b]A method with an override rather than a read of `Input.mouse_mode` at the call
+## site, because that read cannot be tested here.[/b] The dummy display server pins the
+## mode to `MOUSE_MODE_VISIBLE` and drops every write to it without erroring, so a suite
+## can neither put a client into the state a player plays in nor out of it — which is
+## why arena's identical guard has never been exercised by anything.
+func mouse_drives_view() -> bool:
+	if mouse_capture_override != null:
+		return bool(mouse_capture_override)
+
+	return Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	# [b]Before the `player == null` guard, deliberately.[/b] A browser player clicks
 	# while the world is still loading more often than not, and a click swallowed
@@ -255,6 +280,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	if event is InputEventMouseMotion:
+		if not mouse_drives_view():
+			return
+
 		var sampler := player.sampler if _offline else _sampler
 		if sampler != null:
 			sampler.handle_event(event)

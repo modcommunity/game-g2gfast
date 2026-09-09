@@ -556,3 +556,17 @@ func _test_ghost() -> void:
 	for _i in range(4):
 		await get_tree().process_frame
 	_check(changed.ok and game.ghost() != null, "and it is back with its map")
+
+	# [b]The look guard, on the predicate rather than through a client.[/b] Nothing in
+	# this suite stands a `G2GClient` up, so the honest thing this can check is the
+	# contract the motion handler branches on. `Input.mouse_mode` is not the thing to
+	# assert against: the dummy display server pins it to VISIBLE and drops every write
+	# without erroring, which is why `game-arena`'s identical guard has never been
+	# exercised by anything either.
+	var look := G2GClient.new()
+	_check(not look.mouse_drives_view(),
+		"a released cursor is not a look input")
+	look.mouse_capture_override = true
+	_check(look.mouse_drives_view(),
+		"and a captured one is")
+	look.free()
