@@ -362,6 +362,32 @@ func ensure_game_ticked(tick: int) -> void:
 
 # --- The client tick -------------------------------------------------------
 
+## Whether the local player is holding the trigger this tick.
+##
+## Set by the client each frame and read once, when the input packet is built. A field
+## rather than a parameter on [method client_tick] because `client_tick` is called from
+## the clock's "how many ticks is this frame worth" loop and may run two or three times
+## for one frame's worth of input — so the trigger belongs beside the sampler's state
+## rather than in the loop's arguments.
+var attack_wanted: bool = false
+
+
+## Tells the combat layer a player pulled the trigger on a tick.
+##
+## [b]Called from `_net_apply_input`, which runs on a replay as well as on a fresh
+## tick.[/b] The predictor re-applies every unacknowledged command when it reconciles,
+## so a trigger read anywhere else would be a shot the replay could not reproduce — and
+## on the server it is the one place the input for a given tick is known to have been
+## applied to that tick.
+func note_attack(player: G2GPlayer, attack: bool) -> void:
+	if game == null or game.combat == null or player == null:
+		return
+
+	var command := DotCombatCommand.new()
+	command.set_button(DotCombatCommand.BUTTON_ATTACK, attack)
+	game.combat.set_fire_command(player.player_id, command)
+
+
 func client_tick(tick: int, command: DotFpsCommand) -> void:
 	if net == null or net.is_server or game == null:
 		return
@@ -372,6 +398,7 @@ func client_tick(tick: int, command: DotFpsCommand) -> void:
 	packet.tick = tick
 	packet.delta = net.clock.tick_duration()
 	packet.move = command if command != null else DotFpsCommand.new()
+	packet.attack = attack_wanted
 
 	# Into the local history BEFORE predicting: reconciliation replays it.
 	net.local_inputs().push(packet)
@@ -382,6 +409,7 @@ func client_tick(tick: int, command: DotFpsCommand) -> void:
 	var mine: G2GPlayerNet = _behaviours.get(local_player_id)
 	if mine != null:
 		mine.last_move = packet.move
+		mine.last_attack = packet.attack
 
 	if link != null:
 		var payload := net.encode_ack()

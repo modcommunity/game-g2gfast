@@ -208,6 +208,77 @@ func taints_records() -> bool:
 	return only_practice and count() > 0
 
 
+## Moves a block an admin is already looking at, rather than placing another.
+##
+## [b]This is what a practice line is actually built with.[/b] Placing a block puts one
+## roughly where you are looking; getting it onto the ledge you meant needs a nudge,
+## and a gun is the nudge. `DotPhysGun` was built per player here and reachable from
+## nothing until the family's own detector — a public method whose name occurs once in
+## its repository — found it.
+##
+## [b]It re-freezes on release.[/b] `DotPhysGun.grab` unfreezes what it picks up,
+## because a frozen prop being dragged is a contradiction the solver resolves by doing
+## something alarming — so a block let go over a gap would fall through it, and every
+## block on this server is meant to stay where it was put.
+func nudge(
+	player_id: StringName, origin: Vector3, direction: Vector3, delta: float
+) -> bool:
+	if spawner == null or not spawner.authoritative:
+		return false
+
+	var gun := phys_gun(player_id)
+
+	if gun.held != null and gun.held.is_alive():
+		gun.hold(origin, direction, Basis.looking_at(direction, Vector3.UP), delta)
+		return true
+
+	var space: Variant = _space()
+
+	if space == null:
+		return false
+
+	return gun.grab(
+		space, origin, direction, Basis.looking_at(direction, Vector3.UP)
+	).ok
+
+
+## Lets go of what a player was moving, and freezes it where it ended up.
+func drop(player_id: StringName) -> bool:
+	if not _phys_guns.has(player_id):
+		return false
+
+	var gun: DotPhysGun = _phys_guns[player_id]
+	var was := gun.release()
+
+	if was == null:
+		return false
+
+	# Frozen again. Every block on this server is meant to stay where it was put, and
+	# `grab` unfroze it to move it.
+	DotPhysGun.set_frozen(was, true)
+	return true
+
+
+## The physics space the tools trace in, or null when there is none.
+##
+## Typed [Variant] because `DotPropTool.target` takes one — the tools are written so
+## they compile in a project that is not in a 3D scene at all, which is how they are
+## tested headlessly.
+##
+## [b]Taken off the world node rather than off this one.[/b] `G2GProps` is a plain
+## [Node] and `get_world_3d()` does not exist on one; dot-npc's own notes record the
+## same mistake, where a duck-typed branch around it would not even compile because
+## GDScript cannot infer what such a branch returns.
+func _space() -> Variant:
+	if _world == null or not _world.is_inside_tree():
+		return null
+
+	# Typed explicitly. `var x := f()` where f returns Variant is a parse ERROR under
+	# these projects' warning settings.
+	var world: World3D = _world.get_world_3d()
+	return world.direct_space_state if world != null else null
+
+
 ## This player's physics gun, made on first use.
 func phys_gun(player_id: StringName) -> DotPhysGun:
 	if not _phys_guns.has(player_id):
@@ -236,6 +307,35 @@ func release_player(player_id: StringName) -> void:
 func tick(delta: float) -> void:
 	if spawner != null:
 		spawner.advance(delta)
+
+	_carry(delta)
+
+
+## Keeps every held block where its holder is looking. Once per tick.
+##
+## [b]A grab happens once and a held prop moves every tick.[/b] A layer that only
+## called `grab` would give an admin a block that stayed exactly where it was picked
+## up, which reads as the physics gun not working rather than as a missing call.
+func _carry(delta: float) -> void:
+	if game == null:
+		return
+
+	for id in _phys_guns.keys():
+		var gun: DotPhysGun = _phys_guns[id]
+
+		if gun.held == null or not gun.held.is_alive():
+			continue
+
+		var player: G2GPlayer = game.players.get(id)
+
+		if player == null:
+			gun.release()
+			continue
+
+		var aim := player.aim_direction()
+		gun.hold(
+			player.eye_position(), aim, Basis.looking_at(aim, Vector3.UP), delta
+		)
 
 
 func _on_spawned(prop: DotPropInstance) -> void:

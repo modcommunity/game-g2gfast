@@ -519,6 +519,57 @@ func _test_modes() -> void:
 				"the record ghost is not on the scoreboard"
 			)
 
+			# --- The trigger, which nothing sent until it was looked for ---
+			#
+			# [b]`sv_deathmatch` was a mode nobody could shoot in.[/b] `G2GCombat`
+			# built the arsenals, the hitboxes and the match, and read a fire command
+			# that nothing ever set — found by the family's own detector, because
+			# `set_fire_command` occurred once in the repository.
+			#
+			# The trigger is a bit on `G2GNetCommand` rather than a request: a shot
+			# happens on a tick and has to be replayed with the movement of that tick,
+			# and a trigger arriving reliably-and-separately would be replayed against
+			# a different tick's position every time.
+			var arsenal_before := game.combat._kit[&"u4242"]["arsenal"] as DotArsenal
+			_check(
+				arsenal_before.slots().size() >= 1,
+				"an armed player has something to shoot with",
+				"%d slots" % arsenal_before.slots().size()
+			)
+
+			var fire := DotCombatCommand.new()
+			fire.set_button(DotCombatCommand.BUTTON_ATTACK, true)
+			game.combat.set_fire_command(&"u4242", fire)
+
+			# [b]An Array, not an int.[/b] A GDScript lambda captures locals by
+			# VALUE, so a counter incremented inside a signal handler stays zero
+			# outside it — and the assertion then reports a failure for a signal that
+			# fired perfectly. This file's own family notes carry the warning and this
+			# check was written wrong anyway.
+			var shots: Array[DotShot] = []
+			game.combat.manager.shot_resolved.connect(
+				func(shot: DotShot) -> void: shots.append(shot)
+			)
+
+			# Enough ticks for the deagle's 160 rpm to come round. A weapon that fired
+			# on the first tick would be a weapon with no rate of fire.
+			for _step in range(game.tick_rate):
+				game.combat.tick(1.0 / float(game.tick_rate))
+
+			_check(
+				shots.size() > 0,
+				"and holding the trigger fires it",
+				"%d shots" % shots.size()
+			)
+
+			# The rate of fire is real: 160 rpm over one second is under three shots,
+			# and a trigger read as "fire every tick" would be a hundred.
+			_check(
+				shots.size() < 10,
+				"at its rate of fire rather than once a tick",
+				"%d shots in a second" % shots.size()
+			)
+
 			game.remove_player(&"u4242")
 
 	if game.hunters != null:

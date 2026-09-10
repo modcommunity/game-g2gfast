@@ -300,7 +300,8 @@ func _add_server_commands() -> void:
 
 	if game.hunters != null:
 		add_command("g2g_hunt", _cmd_hunt,
-			"Show or clear the hunters", DotAdminFlags.GENERIC)
+			"Show, clear, or place one: g2g_hunt [clear|spawn <id>]",
+			DotAdminFlags.GENERIC)
 
 	if game.props != null:
 		add_command("g2g_place", _cmd_place,
@@ -309,6 +310,9 @@ func _add_server_commands() -> void:
 			"Take the last block back", DotAdminFlags.CHANGEMAP)
 		add_command("g2g_place_clear", _cmd_place_clear,
 			"Clear every placed block", DotAdminFlags.CHANGEMAP)
+		add_command("g2g_nudge", _cmd_nudge,
+			"Grab the block you are looking at, or drop the one you hold",
+			DotAdminFlags.CHANGEMAP)
 
 
 func _cmd_nominate(ctx: DotCmdContext) -> void:
@@ -358,6 +362,9 @@ func _cmd_stats(ctx: DotCmdContext) -> void:
 		int(values.get_value(G2GStats.JUMPS, 0.0)),
 		G2GStats.perfect_ratio_of(values) * 100.0,
 	])
+	# Both derived, never stored: a stored quotient is a third number that can
+	# disagree with the two it came from.
+	ctx.reply("Finish rate: %.0f%%" % [G2GStats.finish_rate_of(values) * 100.0])
 	ctx.reply("Top speed: %.0f u/s over %.0f m" % [
 		values.get_value(G2GStats.TOP_SPEED, 0.0),
 		values.get_value(G2GStats.DISTANCE, 0.0),
@@ -368,6 +375,28 @@ func _cmd_stats(ctx: DotCmdContext) -> void:
 func _cmd_hunt(ctx: DotCmdContext) -> void:
 	if not ctx.args.is_empty() and ctx.args[0] == "clear":
 		ctx.reply("Removed %d hunter(s)." % game.hunters.clear())
+		return
+
+	if not ctx.args.is_empty() and ctx.args[0] == "spawn":
+		var caller := _caller(ctx)
+
+		if caller == null:
+			ctx.reply("Stand somewhere first.")
+			return
+
+		var which: StringName = (
+			StringName(ctx.args[1]) if ctx.args.size() > 1 else G2GHunters.STALKER
+		)
+
+		# In front of the admin rather than at their feet, so the thing they just
+		# placed is not immediately inside them.
+		var at := caller.eye_position() + caller.aim_direction() * 4.0
+		var made := game.hunters.spawn_one(which, at)
+
+		ctx.reply(
+			"Placed a %s." % String(which) if made != null
+			else "That hunter could not be placed."
+		)
 		return
 
 	ctx.reply_lines(game.hunters.describe_lines())
@@ -401,6 +430,29 @@ func _cmd_place_undo(ctx: DotCmdContext) -> void:
 
 func _cmd_place_clear(ctx: DotCmdContext) -> void:
 	ctx.reply("Cleared %d block(s)." % game.props.clear())
+
+
+## Grabs, or drops. One command for both, because an admin who has to remember which
+## of two they typed last is an admin holding a block they cannot put down.
+func _cmd_nudge(ctx: DotCmdContext) -> void:
+	var caller := _caller(ctx)
+
+	if caller == null:
+		ctx.reply("Stand somewhere first.")
+		return
+
+	var id := _caller_id(ctx)
+
+	if game.props.drop(id):
+		ctx.reply("Dropped it, frozen where it is.")
+		return
+
+	var took := game.props.nudge(
+		id, caller.eye_position(), caller.aim_direction(),
+		1.0 / float(maxi(game.tick_rate, 1))
+	)
+
+	ctx.reply("Grabbed it — it follows you now." if took else "Nothing there.")
 
 
 ## A player typed `!something` that dot-server's own commands did not answer.
@@ -630,12 +682,29 @@ func _on_client_disconnected(session: DotClientSession, _reason: String = "") ->
 func _avatar_for(session: DotClientSession) -> DotAvatar:
 	var platform: Object = server.modules.get_module("platform")
 	if platform == null or not platform.has_method("player_for"):
-		return null
+		return _identity_avatar(session)
 	var player: Variant = platform.call("player_for", session)
 	if player == null or not (player is Object):
-		return null
+		return _identity_avatar(session)
 	var avatar: Variant = (player as Object).get("avatar")
-	return avatar as DotAvatar if avatar is DotAvatar else null
+	if avatar is DotAvatar:
+		return avatar as DotAvatar
+	return _identity_avatar(session)
+
+
+## The hub's own answer, when the module has not resolved one yet.
+##
+## [b]Admission finishes AFTER a client is spawned, and this is the gap that leaves.[/b]
+## dot-platform's module runs off `client_state_changed` because dot-server has no
+## cancellable stage between authentication and content — its own notes say so — so a
+## player can be in the world with the platform still resolving them. Asking the hub
+## directly closes it: the hub answers with what it has, and `G2GIdentity.avatar_for`
+## falls back to the stock document, which is a real avatar over the same schema.
+func _identity_avatar(session: DotClientSession) -> DotAvatar:
+	if identity == null or session == null:
+		return null
+
+	return identity.avatar_for("u%d" % session.userid)
 
 
 func _player_id(session: DotClientSession) -> StringName:

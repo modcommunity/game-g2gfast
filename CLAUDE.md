@@ -414,7 +414,7 @@ godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_run.tscn   # 110 checks
 godot --headless --path . res://examples/headless_net.tscn   # 90 checks
-godot --headless --path . res://examples/dedicated.tscn      # 107 checks
+godot --headless --path . res://examples/dedicated.tscn      # 121 checks
 godot --headless --path . res://examples/jitter_probe.tscn   # 4 configurations
 godot --headless --path . res://examples/headless_imported.tscn  # 20 per imported map
 ```
@@ -763,6 +763,51 @@ without it.
 the shape `external-study/` already has: reading a map for its dimensions, its ramp
 angles and its stage layout is the point of having it. Shipping extracted geometry in a
 released game is a different act and needs the author's permission.
+
+## The detector, turned on this game's own new code
+
+The family's rule is that **an exported setting whose name occurs exactly once in its
+repository is a setting nothing reads**. The same grep over *methods* is worth as much
+and had never been run: a public method whose name occurs once is a method nothing
+calls. Turned on the twenty-six-addon pass it found seven, and the first is the one
+that matters:
+
+- **`G2GCombat.set_fire_command`, which meant `sv_deathmatch` was a mode nobody could
+  shoot in.** The arsenals were built, the hitboxes were registered, the match was
+  counting, and the fire command every tick read was one nothing ever set. The fix is a
+  bit on `G2GNetCommand` rather than a request, and the reason is prediction: a shot
+  happens on a tick and has to be replayed with the movement of that tick, so a trigger
+  arriving reliably-and-separately would be replayed against a different tick's
+  position every time. It is applied in `_net_apply_input`, which is the one place that
+  runs on a replay as well as on a fresh tick — and **not retained across a lost
+  packet**, unlike the movement: a held trigger that survives a hiccup is a weapon that
+  empties itself during one.
+- **`G2GArsenal.weapon_table`, which meant `DotLoadoutManager` was a manager of
+  nothing.** It was built, given a schema and a store, and asked for nothing; everybody
+  got a hard-coded knife and deagle. dot-loadout has never heard of a `DotWeapon` and
+  dot-combat has never heard of a `DotItem`, and the table between them is the whole
+  join.
+- **`G2GClientExtras.receive_line`.** The client's `DotChatClient` was a history nothing
+  fed. `G2GServices` routes a line through dot-chat and hands it to dot-server's manager
+  to put on the wire, so on the client it arrives on `DotClientLink.chat_received` — not
+  on anything dot-chat owns.
+- **`G2GIdentity.avatar_for`.** dot-platform's module runs off `client_state_changed`
+  because dot-server has no cancellable stage between authentication and content, so a
+  player can be in the world with the platform still resolving them. The module's own
+  `_avatar_for` now falls through to the hub, which falls through to the stock document.
+- **`G2GProps.phys_gun`, `G2GHunters.spawn_one`, `G2GStats.finish_rate_of`** — a tool,
+  an admin spawn and a derived figure, each reachable from nothing. `g2g_nudge`,
+  `g2g_hunt spawn` and `!stats` are the doors.
+
+Two things the new checks found that were not on the list:
+
+- **A grab is once and a held prop moves every tick.** A layer that only called `grab`
+  gives an admin a block that stays exactly where it was picked up, which reads as the
+  physics gun not working rather than as a missing `hold`.
+- **A GDScript lambda captures locals by value.** The shot counter was an `int`
+  incremented inside a signal handler, so it stayed zero outside it — and the assertion
+  reported a failure for a signal that had fired perfectly. This file's own family notes
+  carry that warning, and the check was written wrong anyway.
 
 ## Things deliberately not here
 

@@ -247,6 +247,13 @@ func _build_netcode() -> DotResult:
 			hud.notice(text)
 	)
 
+	# [b]Where chat actually arrives.[/b] `G2GServices` routes a line through dot-chat
+	# and then hands it to dot-server's manager to put on the wire, so on this end it
+	# lands on `DotClientLink.chat_received` — not on anything dot-chat owns. Without
+	# this connection the client's `DotChatClient` is a history nothing feeds.
+	if link != null and link.has_signal("chat_received"):
+		link.connect("chat_received", extras.receive_wire)
+
 	bridge.hello_received.connect(_on_hello)
 	bridge.finish_received.connect(func(pid: int, time: float, rank: int) -> void:
 		if hud != null and pid == bridge.local_player_id:

@@ -22,6 +22,15 @@ var net_modifiers: int = 0
 ## Retained, not cleared: a player whose packet was lost keeps moving in a straight
 ## line rather than stopping dead. The controller says the same of its own command.
 var last_move: DotFpsCommand = DotFpsCommand.new()
+
+## Whether the trigger was down on the last input applied.
+##
+## [b]NOT retained across a lost packet, unlike the movement.[/b] A player whose input
+## went missing should keep running in the direction they were going — stopping dead is
+## worse than overshooting — but should not keep firing: a held trigger that survives a
+## dropped packet is a weapon that empties itself during a hiccup, and on a server with
+## lag compensation it is a shot fired at a moment nobody chose.
+var last_attack: bool = false
 var last_state_tick: int = -1
 
 
@@ -40,6 +49,14 @@ func _net_apply_input(input: DotNetInput, _tick: int) -> void:
 	var command := input as G2GNetCommand
 	if command != null:
 		last_move = command.move
+		last_attack = command.attack
+
+		# The trigger reaches the combat layer here rather than in the bridge's tick,
+		# because this is the one place that runs on a REPLAY as well as on a fresh
+		# tick — the predictor calls it for every unacknowledged command. A trigger
+		# read anywhere else would be a shot the replay could not reproduce.
+		if bridge != null:
+			bridge.note_attack(player, command.attack)
 
 
 ## On the authority the whole game ticks as one — every player moves, then every

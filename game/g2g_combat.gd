@@ -149,6 +149,79 @@ func _build_match() -> DotResult:
 	return DotResult.success(match_node)
 
 
+## The two weapons everybody starts with.
+static func _give_default(arsenal: DotArsenal) -> void:
+	arsenal.clear()
+	arsenal.give(G2GArsenal.knife(), 1)
+	arsenal.give(G2GArsenal.deagle(), 2)
+
+
+## Gives a player the weapons their saved loadout names.
+##
+## [b]This is the entire dot-loadout seam, and without it the manager was a manager of
+## nothing.[/b] dot-loadout has never heard of a `DotWeapon` and dot-combat has never
+## heard of a `DotItem`; `G2GArsenal.weapon_table()` is the table from one to the other
+## and this loop is the whole of the join. The manager was built, configured with a
+## schema and a store, and asked for nothing until the family's own detector found
+## `weapon_table()` occurring once.
+##
+## Falls back to the default on ANY failure, for the reason above.
+func _apply_loadout(player_id: StringName) -> void:
+	var kit: Dictionary = _kit.get(player_id, {})
+
+	if kit.is_empty():
+		return
+
+	var arsenal: DotArsenal = kit["arsenal"]
+	var res: DotResult = await loadouts.active_for(_loadout_key(player_id))
+
+	if not res.ok:
+		DotLog.debug(CHANNEL, "loadout unavailable, using the default", {
+			"player": String(player_id), "why": res.error.message
+		})
+		return
+
+	var table := G2GArsenal.weapon_table()
+	var entries := loadouts.resolve(res.value)
+
+	if entries.is_empty():
+		return
+
+	arsenal.clear()
+
+	var lowest := 0
+
+	for entry in entries:
+		var item: DotItem = entry["item"]
+		var weapon: DotWeapon = table.get(item.id)
+
+		if weapon == null:
+			continue
+
+		var slot := int(entry["arsenal_slot"])
+		arsenal.give(weapon, slot)
+
+		if lowest == 0 or slot > lowest:
+			lowest = slot
+
+	if arsenal.slots().is_empty():
+		# A loadout that resolved to nothing this game can build. Better a knife than
+		# an empty pair of hands.
+		_give_default(arsenal)
+		lowest = 2
+
+	arsenal.select(maxi(lowest, 1), game.current_tick())
+
+
+## A storage key that is usable as a filename.
+##
+## `DotLoadoutKey.is_usable` has a minimum length, so a bare `u7` is refused before any
+## store sees it — and the check exists so a malformed key can never reach a filesystem
+## path. Padding is right; loosening the check is not.
+static func _loadout_key(player_id: StringName) -> String:
+	return "g2g-player-%08d" % entity_id_for(player_id)
+
+
 func _build_loadouts() -> void:
 	loadouts = DotLoadoutManager.new()
 	loadouts.name = "Loadouts"
@@ -255,9 +328,14 @@ func _arm(player: G2GPlayer) -> void:
 		"arsenal": arsenal,
 	}
 
-	arsenal.give(G2GArsenal.knife(), 1)
-	arsenal.give(G2GArsenal.deagle(), 2)
-	arsenal.select(2, game.current_tick())
+	# The default, immediately, and their saved loadout a frame later.
+	#
+	# [b]A loadout comes from a store and arming may not wait on one.[/b] The same
+	# call game-arena makes about a respawn: the player is in the world with something
+	# to shoot, and what they chose arrives when it arrives. An unreachable store is a
+	# reason to hand somebody a knife, not a reason to leave them unarmed.
+	_give_default(arsenal)
+	_apply_loadout(player.player_id)
 
 	match_node.add_player(str(entity), player.display_name, game.current_tick())
 
