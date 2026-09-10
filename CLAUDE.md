@@ -55,6 +55,7 @@ game/
   g2g_services.gd   dot-chat + dot-voice + dot-moderation, on a dedicated server
   g2g_identity.gd   dot-cloud + dot-auth + dot-user + dot-platform
   g2g_client_extras.gd  the client halves of chat and voice
+  g2g_browser.gd    dot-browser's client half: !servers, and what a row says
 npcs/               two hunters and the body they share
 props/              three practice blocks, in the genre's 32/64/128 sizes
 maps/               bhop_g2g_intro, surf_g2g_intro, and their .zones.json
@@ -372,6 +373,39 @@ sender and never read out of the payload.
 Its default channel is **ALL**, which is the opposite of game-arena's, and both are
 right: an arena is a room, and a course is long and thin with half the server two
 hundred metres away.
+
+**UDP on a desktop and TCP in a browser, and neither is chosen anywhere.** The two
+voice calls are declared `unreliable`, which is what voice wants: a lost frame is 20 ms
+of silence a jitter buffer conceals, and a resent one arrives after the frames either
+side of it have already played. What that becomes on the wire is `DotTransportAuto`'s
+decision, and it has one sensible answer either way — ENet honours the unreliable
+channel as UDP, and a browser has no UDP at all, so WebSocket delivers it reliably and
+in order over TCP whatever anybody asks for. The platform rule falls out rather than
+being written, and neither game names a transport.
+
+### The server browser, from the other end
+
+`G2GQuery` has contributed the map, the tick rate, the styles and the world record
+since the module was written, and **nothing had ever read any of it**. `G2GBrowser` is
+dot-browser's client half: the list model, three protocols, local filters, favourites
+and history — and `dedicated` now has a real browser ask a real `DotServer` over a real
+UDP socket, which is the seam the family's notes name as untested.
+
+Two things a reader of a query section gets wrong once, and both were got wrong here
+first:
+
+- **The map is not `entry.map`.** That is dot-server's `info.map`, which means "the
+  content id of the loaded game" and is empty on a server that never switches games.
+  dot-browser nests a game's own section under `rules["game"]` precisely so a game
+  putting a field called `map` in it cannot overwrite the other one.
+- **JSON has one number type.** `tick_rate` is contributed as an int and comes back as
+  a float, so `game_field(entry, "tick_rate")` is `"100.0"`. `game_number` is the
+  accessor; `wr` is a dictionary and has a third.
+
+The list is a chat command rather than a screen — `!servers`, or F3 — because that is
+what this genre's fingers already do, and because this client has a HUD and a keyboard
+rather than a [DotScreenStack]. game-arena has the screen. The same addon does the same
+work either way; where it is drawn is the half a game is supposed to decide.
 
 ## Validating
 
@@ -741,10 +775,12 @@ released game is a different act and needs the author's permission.
 - **A chat window.** `DotChatClient` holds the history, the channels and the unread
   counts on the client the moment anybody writes a screen for it; what a player gets
   today is the HUD's notice line.
-- **A server browser screen.** `G2GQuery` is the server half and has been since the
-  module was written — dot-browser's client half, with sources, filters and
-  favourites, is not wired into `G2GClient`, and nothing has yet asked a real
-  `DotServer` for it.
+- **A server browser SCREEN.** The browser itself is wired in and asks a real
+  `DotServer`; what it draws is a chat listing, and a table a player can click a row
+  of is a `DotScreen` and a stack this client does not have.
+- **A master server.** `DotBrowserSourceBackbone` reads a listing that nothing is yet
+  publishing, and there is no heartbeat — so a browser here finds what somebody typed
+  into it and nothing else. That gap is the family's, not this game's.
 - **A map-sync client.** game-arena has one; this game does not need one, because
   `G2GGame` drives a `DotMapSession` on every instance including a mirroring client
   and the bridge already sends a map change as a game event. Adding `DotMapSyncClient`

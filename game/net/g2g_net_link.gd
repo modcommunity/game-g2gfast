@@ -32,9 +32,20 @@ const CHANNEL_STATE := 1
 ##
 ## A talk spurt is fifty frames a second per speaker relayed to every listener. On the
 ## state channel it would sit in the same ordered queue as the snapshots, so somebody
-## holding the talk key would add a frame of latency to everybody's movement — and on
-## a server where a run is counted in ticks, latency is the one thing that must not
-## depend on whether anybody is talking.
+## holding the talk key would add a frame of latency to everybody's movement — and on a
+## server where a run is counted in ticks, latency must not depend on whether anybody
+## is talking.
+##
+## [b]UDP on a desktop and TCP in a browser, and neither is chosen here.[/b] The calls
+## below are declared `unreliable`, which is what voice wants: a lost frame is 20 ms of
+## silence a jitter buffer conceals, and a resent one arrives after the frames either
+## side of it have already played. What that becomes on the wire is
+## `DotTransportAuto`'s decision and it has one sensible answer either way — ENet
+## honours the unreliable channel as UDP; a browser has no UDP at all, so WebSocket
+## delivers it reliably and in order over TCP whatever anybody asks for.
+##
+## So the platform rule falls out rather than being written, and this file names
+## neither transport.
 const CHANNEL_VOICE := 2
 
 ## The bridge these calls are delivered to. Set by whoever creates this node.

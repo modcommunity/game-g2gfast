@@ -41,6 +41,13 @@ func _contribute(snapshot: DotQuerySnapshot) -> void:
 		"auto_bhop": game.config.auto_bhop,
 		"styles": styles,
 		"running": running,
+		# What else this server is running, so a browser can tell a plain timer server
+		# from one with deathmatch on. A player filtering a list for "surf DM" is
+		# filtering for exactly this, and without it the two are indistinguishable
+		# until you have joined one.
+		"deathmatch": game.combat != null and game.combat.enabled,
+		"hunters": game.hunters != null and game.hunters.enabled,
+		"props": game.props != null and game.props.count() > 0,
 	}
 
 	var map := game.maps.current

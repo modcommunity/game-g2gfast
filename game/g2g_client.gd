@@ -21,6 +21,12 @@ var net: DotNetManager = null
 var bridge: G2GNetBridge = null
 var link: Node = null
 
+## The server browser: dot-browser's client half.
+##
+## Built whether or not this client is connected, because looking for a server is what
+## you do when you are not on one. `!servers` lists what it found.
+var servers: G2GBrowser = null
+
 ## Chat and voice: the client halves of what [G2GServices] runs on the server.
 ##
 ## Null offline, deliberately. Both are about a server telling this client something,
@@ -76,8 +82,41 @@ func _ready() -> void:
 		var netted := _build_netcode()
 		DotLog.result("g2g.client", "netcode", netted)
 
+	# The server browser. Built on every client, connected or not: looking for a
+	# server is what you do when you are not on one, and a browser that only existed
+	# while you were already playing would be a browser nobody could reach.
+	servers = G2GBrowser.new()
+	servers.name = "Servers"
+	add_child(servers)
+
+	var listed := servers.setup()
+	DotLog.result("g2g.client", "the server browser", listed)
+
 	_grab_mouse()
 	set_process(true)
+
+
+## Lists what the browser found, on the HUD. What `!servers` and F3 both call.
+##
+## [b]A chat command rather than a screen, and game-arena has a screen.[/b] That game
+## has a [DotScreenStack]; this client has a HUD and a keyboard, and the genre's answer
+## to "show me the servers" is a chat trigger, because that is what a bhop player's
+## fingers already do. The list model, the sources, the filters and the favourites are
+## the same addon doing the same work either way.
+func show_servers() -> void:
+	if servers == null or hud == null:
+		return
+
+	hud.notice("Looking for servers…")
+
+	var found: DotResult = await servers.refresh()
+
+	if not found.ok:
+		hud.notice(found.error.message)
+		return
+
+	for line in servers.lines():
+		hud.notice(line)
 
 
 ## Hides and captures the cursor, or arranges for a click to do it.
@@ -330,6 +369,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	match (event as InputEventKey).physical_keycode:
+		KEY_F3:
+			show_servers()
 		KEY_F5:
 			if player.camera != null and not player.camera.toggle():
 				hud.notice("Third person is not allowed on this server.")

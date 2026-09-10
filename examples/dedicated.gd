@@ -31,6 +31,7 @@ func _run() -> void:
 		_test_replay_bot_cvar()
 		_test_query_and_chat()
 		await _test_services()
+		await _test_browser()
 		_test_vote()
 		_test_modes()
 		await _test_unload()
@@ -582,6 +583,116 @@ func _test_modes() -> void:
 			not game.props.taints_records(),
 			"and records are rankable again once the course is clear"
 		)
+
+
+## dot-browser asking a real [DotServer] — which nothing in this family had done.
+##
+## [b]This is the seam the family's own notes name.[/b] dot-server has answered A2S and
+## its own richer protocol since it was written; dot-browser's suite queries a DQP
+## server over a real loopback socket. Neither had ever met the other.
+##
+## What this game contributes that a bare `DotGameDescriptor` cannot is `G2GQuery`'s
+## section: the map, the tick rate, the styles, the world record, and — since the
+## modes were added — whether deathmatch and the hunters are on. A player filtering a
+## list for "surf DM" is filtering for exactly that.
+func _test_browser() -> void:
+	print("")
+	print("a browser asking this server")
+
+	var servers := G2GBrowser.new()
+	servers.name = "Servers"
+	servers.timeout_ms = 2000
+	# In memory. A suite that wrote a player's favourites to disk is a suite that
+	# passes differently the second time it is run.
+	servers.favourites_path = ""
+	add_child(servers)
+
+	var started := servers.setup()
+	_check(started.ok, "the browser starts", str(started.error))
+
+	if not started.ok:
+		servers.queue_free()
+		remove_child(servers)
+		return
+
+	# The QUERY port, not the game port. dot-server listens for queries separately, and
+	# a browser that asked the game port would get no answer and report the server as
+	# offline — which reads as the browser being broken.
+	var added := servers.add(
+		"127.0.0.1:%d" % server.config.port, server.config.query_port
+	)
+	_check(added.ok, "a server can be added by address", str(added.error))
+
+	var refreshed: DotResult = await servers.refresh()
+	_check(refreshed.ok, "and asked", str(refreshed.error))
+
+	var entries := servers.browser.entries()
+	_check(entries.size() == 1, "there is one entry", "%d" % entries.size())
+
+	if entries.is_empty():
+		servers.queue_free()
+		remove_child(servers)
+		return
+
+	var entry := entries[0]
+
+	_check(
+		entry.is_online(),
+		"the server answered",
+		entry.error.message if entry.error != null else entry.status_name()
+	)
+
+	if entry.is_online():
+		# [b]The map is the GAME's, not `entry.map`.[/b] That is dot-server's
+		# `info.map`, which means "the content id of the loaded game" and is empty on
+		# a server that has never switched games. dot-browser nests the game's own
+		# section under `rules["game"]` precisely so a game putting a field called
+		# `map` in it cannot overwrite the other one.
+		_check(
+			G2GBrowser.game_field(entry, "map") == String(game.maps.current.id),
+			"and the map the game says it is running",
+			"%s vs %s" % [
+				G2GBrowser.game_field(entry, "map"), String(game.maps.current.id)
+			]
+		)
+
+		# The tick rate, which is the number a records player checks before anything
+		# else: a time set at 100 is not a time set at 128 unless the timer counts in
+		# sub-tick fractions, and a browser that could not show it would be a browser
+		# nobody used twice.
+		# [b]Read as a number, not as text.[/b] JSON has one number type, so an int
+		# contributed to a query section comes back as a float — the first version of
+		# this compared `game_field(...)` to `str(100)` and failed on `"100.0"`, which
+		# is the query working and the reader guessing.
+		_check(
+			int(G2GBrowser.game_number(entry, "tick_rate")) == game.tick_rate,
+			"and the tick rate",
+			"%.1f vs %d" % [
+				G2GBrowser.game_number(entry, "tick_rate"), game.tick_rate
+			]
+		)
+
+		_check(
+			G2GBrowser.game_field(entry, "deathmatch") != "",
+			"and whether deathmatch is on, which is a mode this server now has",
+			G2GBrowser.game_field(entry, "deathmatch")
+		)
+
+	servers.favourite(entry.key(), true)
+	_check(servers.browser.is_favourite(entry.key()), "a server can be favourited")
+
+	servers.favourite(entry.key(), false)
+	_check(
+		not servers.browser.is_favourite(entry.key()),
+		"and un-favourited again"
+	)
+
+	# One line per server, which is what a chat command draws.
+	var lines := servers.lines()
+	_check(lines.size() == 1, "and the listing is one line per server")
+
+	servers.queue_free()
+	remove_child(servers)
 
 
 func _test_unload() -> void:
