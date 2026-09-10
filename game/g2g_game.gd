@@ -74,6 +74,27 @@ var players: Dictionary = {}
 ## The best replay per map, track and style. What the ghost plays.
 var replays: G2GReplays = G2GReplays.new()
 
+## The deathmatch half. Null unless `sv_deathmatch` built it.
+##
+## [b]A layer, not a mode switch on the game.[/b] While it exists the timer still runs
+## and a player who never presses fire plays exactly the game they played before —
+## which is the only shape a deathmatch on a records server can honestly take.
+var combat: G2GCombat = null
+
+## Hunters on the course. Null unless `sv_hunters` built them.
+var hunters: G2GHunters = null
+
+## Props an admin can place. Null unless `sv_props` built them.
+var props: G2GProps = null
+
+## Statistics and achievements. Null on a client, and on a server that keeps none.
+##
+## [b]Authority only.[/b] A mirroring client sees every finish replicated to it, and
+## counting them there would file everybody's runs a second time in a place the server
+## never reads — and let a modified client award itself achievements. The numbers
+## belong to whoever decides whether a run counted.
+var progress: G2GProgress = null
+
 var _samples: Dictionary = {}
 var _tick: int = 0
 var _accumulator: float = 0.0
@@ -120,6 +141,8 @@ func _ready() -> void:
 	_build_styles()
 	_build_boards()
 	_build_timers()
+	_build_progress()
+	_build_layers()
 	_build_maps()
 
 	set_physics_process(true)
@@ -238,6 +261,97 @@ func _build_timers() -> void:
 	timers.player_finished.connect(_on_player_finished)
 
 
+## Statistics and achievements, if this instance keeps any.
+##
+## [b]After the timers and before the maps, and both halves of that matter.[/b]
+## [method G2GProgress.attach] connects to the timer manager's own signals, which do
+## not exist until `_build_timers` has run; and it connects to `map_ready`, which
+## `_build_maps` can fire during `_ready` when an initial map is configured — so a
+## progress node built afterwards would miss the first map of the session.
+func _build_progress() -> void:
+	if not authoritative or not config.keep_progress:
+		return
+
+	progress = G2GProgress.new()
+	progress.name = "Progress"
+	progress.report_to_backbone = config.report_to_backbone
+	progress.progress_dir = config.records_directory
+	add_child(progress)
+
+	var attached := progress.attach(self)
+
+	if not attached.ok:
+		# A server with no statistics is a server. One that refuses to boot because an
+		# achievement catalogue was rejected is not.
+		DotLog.warn(CHANNEL, "progression is off", {"why": attached.error.message})
+		remove_child(progress)
+		progress.queue_free()
+		progress = null
+
+
+## The deathmatch, the hunters and the props, if this server runs any.
+##
+## [b]Before `_build_maps`, and that is load-bearing.[/b] All three connect to
+## `map_ready`, and `_build_maps` can fire it during `_ready` when an initial map is
+## configured — so a layer built afterwards misses the first map of the session, which
+## for the hunters means no route and for the props means nothing cleared.
+##
+## [b]Each one is built whether or not it is enabled.[/b] `enabled` is a live cvar an
+## operator flips mid-map, and a layer that only existed when it was on would have to
+## be constructed under live players — which is where the interesting failures are.
+## Built and off costs a node and three signal connections.
+func _build_layers() -> void:
+	if not authoritative:
+		return
+
+	if config.deathmatch or config.hunters:
+		# The hunters need somewhere to put damage, so combat is built for either.
+		# A hunter that could hurt a player the server is not tracking would be doing
+		# damage nothing could heal, display or respawn away.
+		combat = G2GCombat.new()
+		combat.name = "Combat"
+		combat.game = self
+		combat.enabled = config.deathmatch
+		add_child(combat)
+
+		var armed := combat.setup()
+
+		if not armed.ok:
+			DotLog.warn(CHANNEL, "deathmatch is off", {"why": armed.error.message})
+			remove_child(combat)
+			combat.queue_free()
+			combat = null
+
+	if config.hunters:
+		hunters = G2GHunters.new()
+		hunters.name = "Hunters"
+		hunters.game = self
+		hunters.enabled = true
+		add_child(hunters)
+
+		var hunting := hunters.setup()
+
+		if not hunting.ok:
+			DotLog.warn(CHANNEL, "the hunt is off", {"why": hunting.error.message})
+			remove_child(hunters)
+			hunters.queue_free()
+			hunters = null
+
+	if config.placeable_props:
+		props = G2GProps.new()
+		props.name = "Props"
+		props.game = self
+		add_child(props)
+
+		var placed := props.setup()
+
+		if not placed.ok:
+			DotLog.warn(CHANNEL, "props are off", {"why": placed.error.message})
+			remove_child(props)
+			props.queue_free()
+			props = null
+
+
 func _build_maps() -> void:
 	maps = DotMapSession.new()
 	maps.name = "Maps"
@@ -276,7 +390,42 @@ func _map_catalogue() -> DotMapCatalogue:
 		map.author = "g2gfast"
 		catalogue.add(map)
 
+	_add_imported_maps(catalogue)
+
 	return catalogue
+
+
+## Every map under `maps/imported/`, without naming one.
+##
+## [b]Scanned rather than listed on purpose.[/b] The list above is a list because those
+## three maps are written by hand in this repository and cannot appear without somebody
+## editing it. An imported map arrives by running `tools/bsp_import.py`, and a second
+## place to remember to add it is exactly the shape that has gone stale four times in
+## this tree — setup.sh, tools/check.sh, package_check.sh and the bootstrap manifests.
+## The manifest the importer writes is the one thing that cannot be forgotten, because
+## the map does not load without it.
+func _add_imported_maps(catalogue: DotMapCatalogue) -> void:
+	var root := "res://maps/imported"
+	var dir := DirAccess.open(root)
+	if dir == null:
+		return
+	for id in dir.get_directories():
+		var manifest_path := "%s/%s/%s.json" % [root, id, id]
+		if not FileAccess.file_exists(manifest_path):
+			continue
+		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(manifest_path))
+		if typeof(parsed) != TYPE_DICTIONARY:
+			push_warning("[maps] %s has no usable manifest" % id)
+			continue
+		var info: Dictionary = parsed
+		var map := DotMapDef.new()
+		map.id = StringName(id)
+		map.display_name = "%s (imported)" % id
+		map.kind = DotMapDef.KIND_BHOP if id.begins_with("bhop") else DotMapDef.KIND_SURF
+		map.tier = int(info.get("tier", 3))
+		map.scene_path = "res://maps/imported/%s/%s.tscn" % [id, id]
+		map.author = str(info.get("source", "imported"))
+		catalogue.add(map)
 
 
 # --- Movement cvars --------------------------------------------------------
@@ -364,6 +513,12 @@ func add_player(
 
 	players[id] = player
 	_samples[id] = DotTimerSample.new()
+
+	if progress != null:
+		# Not awaited: an achievement store may be remote and a join may not wait on
+		# it. Readings that arrive during the load are still counted — see
+		# `G2GProgress.begin`.
+		progress.begin(id, display_name)
 
 	spawn_player(id)
 	player_added.emit(player)
@@ -471,6 +626,16 @@ func _physics_process(delta: float) -> void:
 		_accumulator = 0.0
 
 
+## The tick this game is on.
+##
+## Read rather than reconstructed. `_tick` is advanced by three different callers —
+## the accumulator in `_physics_process`, `tick_once` from a netcode bridge, and
+## `tick_timers_only` on a client — and anything deriving its own would be a fourth
+## copy of a number that already exists.
+func current_tick() -> int:
+	return _tick
+
+
 ## One authoritative tick driven from outside, at a tick number the driver chose.
 func tick_once(tick: int) -> void:
 	_tick = tick
@@ -493,6 +658,25 @@ func _simulate_tick(step: float) -> void:
 
 	for id in players:
 		(players[id] as G2GPlayer).simulate(_tick, step)
+
+	# After the moves and before the timers, which is where every per-tick measurement
+	# in this game belongs: the counters it reads are what the move just produced, and
+	# the distance it measures is the distance that move covered.
+	if progress != null:
+		progress.sample(step)
+
+	# The three layers, in the order their inputs are produced. Combat resolves shots
+	# against the world as it ends the tick — half a tick of movement at surf speeds
+	# is two metres, which at range is a different part of the map. The hunters
+	# perceive where the players ended up. The props are only a rate limit.
+	if combat != null:
+		combat.tick(step)
+
+	if hunters != null:
+		hunters.tick(step)
+
+	if props != null:
+		props.tick(step)
 
 	_feed_timers()
 
@@ -631,6 +815,19 @@ func describe_lines() -> PackedStringArray:
 		config.air_accelerate, config.accelerate, config.gravity, config.friction, config.max_velocity,
 	])
 	out.append("time left    %s" % maps.time_limit.formatted_remaining())
+
+	if progress != null:
+		out.append_array(progress.describe_lines())
+
+	if combat != null:
+		out.append_array(combat.describe_lines())
+
+	if hunters != null:
+		out.append_array(hunters.describe_lines())
+
+	if props != null:
+		out.append_array(props.describe_lines())
+
 	for id in players:
 		out.append("  %s" % str((players[id] as G2GPlayer).describe()))
 	return out

@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://props/g2g_prop_body.gd" id="1_prop"]
+
+[node name="Platform" type="RigidBody3D"]
+script = ExtResource("1_prop")
+half_size = Vector3(1.22, 0.15, 1.22)
+tint = Color(0.70, 0.60, 0.40, 1)

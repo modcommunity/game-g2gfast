@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://props/g2g_prop_body.gd" id="1_prop"]
+
+[node name="BlockSmall" type="RigidBody3D"]
+script = ExtResource("1_prop")
+half_size = Vector3(0.30, 0.30, 0.30)
+tint = Color(0.55, 0.60, 0.70, 1)

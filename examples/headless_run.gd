@@ -34,6 +34,7 @@ func _run() -> void:
 	await _test_surf_run()
 	await _test_bonus_track()
 	await _test_ghost()
+	await _test_progression()
 
 	print("")
 	print("%d passed, %d failed" % [_passed, _failed])
@@ -570,3 +571,161 @@ func _test_ghost() -> void:
 	_check(look.mouse_drives_view(),
 		"and a captured one is")
 	look.free()
+
+
+# --- Progression ------------------------------------------------------------
+
+## dot-stats and dot-achievements, over the runs this suite actually made.
+##
+## [b]Every check here is against a number the runs above PRODUCED.[/b] A progression
+## suite that files its own readings and reads them back is testing dot-stats, which
+## dot-stats already does; what is untested anywhere else is whether a finish in this
+## game reaches those two addons at all.
+func _test_progression() -> void:
+	print("progression")
+
+	var progress := game.progress
+
+	# `_check` in this suite returns void, so the guard is a plain test with the
+	# report beside it rather than the `if not _check(...)` shape the other suites in
+	# this family use.
+	_check(progress != null, "the server keeps progress")
+
+	if progress == null:
+		return
+
+	var schema_ok := progress.stats.schema.validate()
+	_check(schema_ok.ok, "the stats schema validates", str(schema_ok.error))
+
+	var catalogue_ok := progress.achievements.catalogue.validate()
+	_check(catalogue_ok.ok, "the achievement catalogue validates", str(catalogue_ok.error))
+
+	# Every stat an achievement reads must be one the schema declares. Nothing in
+	# either addon can check this: dot-achievements does not know the schema exists
+	# and dot-stats does not know the catalogue does.
+	var undeclared := PackedStringArray()
+
+	for stat in progress.achievements.catalogue.watched_stats():
+		if not progress.stats.schema.has(stat):
+			undeclared.append(String(stat))
+
+	_check(
+		undeclared.is_empty(),
+		"every stat an achievement watches is one the schema declares",
+		", ".join(undeclared)
+	)
+
+	# --- What the runs above filed ---------------------------------------
+
+	var values := progress.session_values(&"bot")
+
+	_check(
+		values.get_value(G2GStats.RUNS_STARTED, 0.0) > 0.0,
+		"runs started were counted",
+		"%d" % int(values.get_value(G2GStats.RUNS_STARTED, 0.0))
+	)
+	_check(
+		values.get_value(G2GStats.RUNS_FINISHED, 0.0) > 0.0,
+		"and so were finishes",
+		"%d" % int(values.get_value(G2GStats.RUNS_FINISHED, 0.0))
+	)
+
+	# A best time is LOWEST, and the distinction between "held zero" and "never seen"
+	# is what stops every player's personal best being zero the moment the feature
+	# ships. A finished run means there IS a time, so it must be above zero.
+	_check(
+		values.get_value(G2GStats.BEST_TIME, 0.0) > 0.0,
+		"a best time was filed as a time rather than as a zero",
+		"%.3f s" % values.get_value(G2GStats.BEST_TIME, 0.0)
+	)
+
+	_check(
+		values.get_value(G2GStats.JUMPS, 0.0) > 0.0,
+		"the movement counters were read off the controller",
+		"%d jumps" % int(values.get_value(G2GStats.JUMPS, 0.0))
+	)
+
+	# The counters are a running total the game RESETS on every finish, so filing the
+	# total on each sample would add the whole history every tick. At 128 Hz over the
+	# runs above that would be six figures for a few hundred jumps.
+	_check(
+		values.get_value(G2GStats.JUMPS, 0.0) < 100000.0,
+		"and filed as deltas rather than as the running total each tick",
+		"%d" % int(values.get_value(G2GStats.JUMPS, 0.0))
+	)
+
+	_check(
+		values.get_value(G2GStats.PERFECT_JUMPS, 0.0)
+			<= values.get_value(G2GStats.JUMPS, 0.0),
+		"perfect jumps never exceed jumps"
+	)
+
+	# In units, because everything a player reads in this game is. A top speed under
+	# a hundred would be metres per second wearing the wrong label.
+	_check(
+		values.get_value(G2GStats.TOP_SPEED, 0.0) > 100.0,
+		"top speed was filed in genre units",
+		"%.0f u/s" % values.get_value(G2GStats.TOP_SPEED, 0.0)
+	)
+
+	# Distance is the one figure this layer measures itself, and it refuses a jump of
+	# more than half a metre in one tick — a respawn, a stage warp or a `!r`. The bot
+	# above was teleported into the finish zone at least once, so a distance equal to
+	# the map's whole length would mean the guard is not working.
+	var distance := values.get_value(G2GStats.DISTANCE, 0.0)
+	_check(distance > 0.0, "distance was measured", "%.0f m" % distance)
+	_check(
+		distance < 100000.0,
+		"and a teleport was not counted as travel",
+		"%.0f m" % distance
+	)
+
+	# --- Achievements ----------------------------------------------------
+
+	_check(
+		progress.achievements.is_unlocked("bot", &"g2g.first_finish"),
+		"finishing a course unlocked the achievement for it"
+	)
+
+	# The differencing. A player with N session finishes must hold N lifetime
+	# finishes, not the running sum 1+2+...+N that a direct signal connection makes.
+	var held := progress.achievements.progress_of("bot")
+
+	if held != null:
+		_check(
+			absf(
+				held.value_of(G2GStats.RUNS_FINISHED)
+					- values.get_value(G2GStats.RUNS_FINISHED, 0.0)
+			) < 0.001,
+			"lifetime finishes equal session finishes, so the link differences",
+			"%.0f vs %.0f" % [
+				held.value_of(G2GStats.RUNS_FINISHED),
+				values.get_value(G2GStats.RUNS_FINISHED, 0.0),
+			]
+		)
+
+		# A LOWEST stat is an absolute in both systems and must be passed through
+		# rather than differenced — differencing a personal best would be meaningless,
+		# and dot-achievements' link says so.
+		_check(
+			absf(
+				held.value_of(G2GStats.BEST_TIME)
+					- values.get_value(G2GStats.BEST_TIME, 0.0)
+			) < 0.001,
+			"and a best time is passed through rather than differenced",
+			"%.3f vs %.3f" % [
+				held.value_of(G2GStats.BEST_TIME),
+				values.get_value(G2GStats.BEST_TIME, 0.0),
+			]
+		)
+
+	# Under Thirty is the trap: a LOWEST stat with an AT_MOST rule is satisfied by a
+	# player who has never been recorded, because a missing stat reads as zero. It is
+	# guarded by a second rule requiring a finished run — so a player who has never
+	# played must NOT have it.
+	await progress.begin(&"nobody", "Nobody")
+	_check(
+		not progress.achievements.is_unlocked("nobody", &"g2g.sub_thirty"),
+		"a player who has never run has not finished a course in under thirty seconds"
+	)
+	await progress.leave(&"nobody")

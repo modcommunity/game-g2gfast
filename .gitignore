@@ -6,14 +6,32 @@
 #   ln -s ../../dot-core/addons/dot_core addons/dot_core
 # A shipped build copies them in instead.
 /addons/dot_core
+/addons/dot_net
+/addons/dot_server
 /addons/dot_fps_controller
 /addons/dot_timer
 /addons/dot_map
 /addons/dot_leaderboard
 /addons/dot_ui
-/addons/dot_server
-/addons/dot_net
+/addons/dot_combat
+/addons/dot_loadout
+/addons/dot_match
+/addons/dot_stats
+/addons/dot_achievements
+/addons/dot_vote
+/addons/dot_props
+/addons/dot_npc
+/addons/dot_npc_ai
+/addons/dot_npc_ai_director
+/addons/dot_auth
+/addons/dot_browser
+/addons/dot_chat
+/addons/dot_cloud
+/addons/dot_moderation
+/addons/dot_platform
+/addons/dot_user
 /addons/dot_user_avatar
+/addons/dot_voice
 
 # Exports
 build/
@@ -25,3 +43,17 @@ Thumbs.db
 
 # Editors
 .vscode/
+
+# Imported maps, and the Python bytecode of the importer.
+#
+# `maps/imported/<id>/` is DERIVED: tools/bsp_import.py regenerates all of it from
+# the .bsp in one pass of about four seconds, so committing it buys nothing and costs
+# 14 MB for two maps. The stronger reason is that those bytes are somebody else's map.
+# Reading a third-party .bsp for its dimensions and its ramp angles is what
+# godot/inspirations/ is for, in the shape godot/../external-study/ already has;
+# redistributing its geometry in this repository is a different act and wants the
+# author's permission. The generated <id>.gd and <id>.tscn live INSIDE that directory
+# rather than beside the hand-written maps, so this stays one line and never becomes a
+# list of map names to keep in step -- which is this tree's most repeated bug.
+/maps/imported/
+/tools/__pycache__/

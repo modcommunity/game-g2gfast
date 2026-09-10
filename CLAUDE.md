@@ -41,12 +41,34 @@ game/
     g2g_event.gd, g2g_request.gd  the two DotNetMessages: a kind and a body
   g2g_geometry.gd   boxes and ramps, in units
   g2g_map.gd        base for the built-in maps
+  g2g_bsp_map.gd    base for an IMPORTED map: mesh, materials and zones from a
+                    manifest. See Decision 11
+  g2g_bsp_lightmapped.gdshader  albedo x the lighting the map's own compiler baked
+  g2g_stats.gd      every per-player number, declared once. See Decision 12
+  g2g_awards.gd     achievements as rules over those ids
+  g2g_progress.gd   dot-stats and dot-achievements, joined to the runs
+  g2g_arsenal.gd    the deathmatch half's weapons, items and match rules
+  g2g_combat.gd     dot-combat + dot-loadout + dot-match, as a layer over the timer
+  g2g_hunters.gd    dot-npc + dot-npc-ai + dot-npc-ai-director, along the course
+  g2g_props.gd      practice blocks, frozen, and what they cost a record
+  g2g_vote.gd       dot-vote over the map catalogue. Replaces the rtv that was not one
+  g2g_services.gd   dot-chat + dot-voice + dot-moderation, on a dedicated server
+  g2g_identity.gd   dot-cloud + dot-auth + dot-user + dot-platform
+  g2g_client_extras.gd  the client halves of chat and voice
+npcs/               two hunters and the body they share
+props/              three practice blocks, in the genre's 32/64/128 sizes
 maps/               bhop_g2g_intro, surf_g2g_intro, and their .zones.json
+  imported/<id>/    what tools/bsp_import.py wrote: <id>.bin, <id>.json, the
+                    lightmap atlas, the textures the .bsp carried, and the four-line
+                    <id>.gd and <id>.tscn. All derived; gitignored; never hand-edited
 avatars/            six stock parts and the tint shader
 scenes/
   g2g_server.tscn   what a dot-server loads. A G2GGame under a plain Node
-examples/           headless_run (91), headless_net (81), dedicated (52)
+examples/           headless_run (93), headless_net (85), dedicated (52),
+                    headless_imported (20 per imported map)
 tools/              export_zones.gd — run after changing a map
+                    bsp_read.py, vtf.py, bsp_import.py — Source .bsp to a map
+                    bsp_preview.gd/.tscn — render an imported map and exit
 ```
 
 **There is no `[input]` block in `project.godot`, and that is deliberate.** There was
@@ -198,16 +220,175 @@ triplanar and in **world** space, so one square is 64 units — the grid this ge
 are built on — on every surface whatever its size. The old `COLOUR_*` constants are role
 ids now and keep their names, so no map file changed.
 
+## Decision 12: everything else this family ships, and the timer keeps running
+
+This game had the timer, the movement, the maps and the boards. It now has the rest of
+the family — twenty-six addons — and the rule every one of them was added under is the
+same sentence:
+
+> **A player who came to run must not be stopped by anything added for a player who
+> came to do something else.**
+
+That is not a slogan; it decides the shape of four of them.
+
+```
+game/
+  g2g_stats.gd     every per-player number, declared once
+  g2g_awards.gd    achievements as a document of rules over those ids
+  g2g_progress.gd  the node joining the two to the game, and to nothing else
+  g2g_arsenal.gd   two weapons, and why they are the genre's rather than an arena's
+  g2g_combat.gd    dot-combat + dot-loadout + dot-match, as a LAYER
+  g2g_hunters.gd   dot-npc + dot-npc-ai + dot-npc-ai-director, along the course
+  g2g_props.gd     practice blocks, frozen, and what they do to a record
+  g2g_vote.gd      dot-vote over the map catalogue
+  g2g_services.gd  dot-chat + dot-voice + dot-moderation
+  g2g_identity.gd  dot-cloud + dot-auth + dot-user + dot-platform
+  g2g_client_extras.gd  the client halves of chat and voice
+```
+
+### Statistics are read, not counted a second time
+
+`DotFpsStats` has counted jumps, perfect jumps, strafes and top speed on every
+controller since dot-fps-controller was written, and dot-timer counts runs and records.
+`G2GProgress` reads those out and files the **difference**; it measures exactly one
+thing itself, which is distance, because nothing else does.
+
+**The difference is not optional and the reason is this game's own.**
+`G2GGame._on_player_finished` calls `controller.stats.reset()` on every finish, so
+filing the total on each sample would file the whole history on every sample and then
+start again from nothing. A total that went *down* is a reset, and the whole new value
+is filed rather than a negative one — the same rule `DotAchievementStatsLink` applies
+one layer up, for the same reason.
+
+**A best time is `LOWEST`, and getting that wrong is a personal best of zero for
+everybody.** dot-stats' `merge` takes the incoming value whole when there is nothing
+held, which is the distinction between "held zero" and "never seen"; `Under Thirty` is
+the achievement that shows what happens without it, and it carries a second rule
+requiring a finished run precisely because *a missing stat reads as zero and "at most
+30" is satisfied by having never played*.
+
+### Deathmatch is a layer, not a mode
+
+`sv_deathmatch` adds hitboxes, health, an arsenal and a scoreboard and **takes nothing
+away**: the timer still runs, and a player who never presses fire plays exactly the
+game they played before. Surf and bhop communities have run deathmatch on their own
+maps for twenty years and the reason is that a map whose movement everybody has learned
+is a map where a fight is about movement.
+
+The weapons are the genre's rather than an arena's, and that is the whole design: a
+one-shot pistol and a knife, hitscan, **no magazine and no reload**. Reloading takes a
+hand off the strafe keys, and every second a player spends not strafing on a surf map
+is a second they spend falling. The rate of fire is the cost instead. Spread is wide
+when moving and tight when still, so the fastest player on the map is the hardest to
+hit and the worst shot.
+
+Three things in the wiring that are not obvious:
+
+- **The entity id is the player's own id with the `u` taken off**, and the inverse is a
+  lookup rather than `"u%d" %`. Two spellings of one id format are two ends of a
+  serialisation that never meet, which this family has paid for twice.
+- **The match carries no time limit.** The map's clock ends the map, and a second clock
+  underneath it that ends the match is two authorities over one question — dot-vote's
+  director already owns the first.
+- **The ghost is not armed.** It is a replay: it cannot press a trigger, cannot be hurt
+  in any way that means anything, and registering it would put a name on the scoreboard
+  that never dies and never leaves.
+
+### A timer map is a critical path, so the hunters have no navigation graph
+
+A hunter cannot catch a runner who is running well — the fastest does 8 m/s and a bhop
+player on a good line does forty. What a hunter punishes is **stopping**, which is what
+the timer already punishes, made visible.
+
+`DotNpcDirectorFlow` is literally "the map's own critical path" as a thing a position
+can be measured along, and a timer map *is* one: start pad, stage lines, end zone. So
+the route is built from the map's own zones — the same list `bhop_g2g_stages` derives
+its geometry from — the director spawns **ahead** along it, and a hunter with nothing to
+chase patrols it. The pathfinding a mesh would give is spent on a map whose route is
+already known.
+
+`require_navigable_spawn` is therefore **off**, and it has to be: there is no graph, so
+a navigable-spawn requirement would refuse every spawn on the map.
+
+### Blocks are frozen, and they cost you the record
+
+What a records community actually places is a practice line, a temporary block on the
+section everybody fails, and a marker at the spot people keep asking about. Every one
+of those wants to stay where it was put, so a prop here is spawned **frozen** — the
+opposite default from a sandbox's, and the reason `g2g_prop_body.gd` has a
+`starts_frozen` export at all.
+
+**`only_practice` is on, and it is what makes the feature safe to ship.** A board with
+one time set over a placed block is a board nobody trusts, and the alternative —
+trusting an admin to clear up — is a rule enforced by memory. The sizes are 32, 64 and
+128 units, the grid this genre's maps are built on, converted at the one boundary
+`G2GUnits` owns.
+
+### The vote this game shipped with was not one
+
+`G2GGame.rock_the_vote` forwards to `DotMapTimeLimit`, which counts votes against a
+fraction and expires the map: a countdown and a tally. `G2GVote` is the ballot a
+records community actually runs — nominations with caps and seconding, an instant
+runoff so a six-option vote is not won by a fifth of the server, a cooldown, and an
+**extend** option, because a player two stages into a run they have been learning for an
+hour should not lose the map to a clock.
+
+Two decisions in it:
+
+- **`begin_on_apply` is off.** The map session's own `changed` is the one signal that
+  says what is running, because it fires for an admin typing `g2g_map` as well. Both
+  firing means two entries in the play history for one play, and a "not in the last
+  five maps" cooldown that is quietly two or three.
+- **The ghost is not a voter.** `_player_count` excludes it, because otherwise a
+  one-player server passes a quorum of two and can rock the vote on its own.
+
+### Chat is the policy; dot-server stays the transport
+
+`G2GServices` hooks `player_chat` and **cancels** it, routes the text through
+`DotChatRouter`, and hands each recipient's line back to dot-server's manager to put on
+the wire. Exactly one of the two delivers a line, which is what stops them being two
+chat systems.
+
+The channel that is about this genre is `running`: everybody who is mid-run. It is a
+`MEMBERS` channel and the membership rule — "their timer is going" — is a thing only
+this game knows, which is exactly why dot-chat asks rather than deciding. The team key
+falls back to it, because a timer server has no teams and a team message on one reaches
+the single player whose team number matches.
+
+**dot-moderation is built first, and the order is load-bearing.** It publishes
+`dot_mute_source` on `_ready` and both routers look that name up when they start; a
+router that started first would find nothing, warn once, and enforce no gag for the life
+of the server. It is here at all because dot-server's mute is two booleans on a session
+object and a session dies with its connection — on a records server that matters more
+than usual, because a gag is how an admin stops somebody spamming `!wr` at everybody.
+
+**Voice rides its own channel on the link.** A talk spurt is fifty frames a second per
+speaker relayed to every listener; on the state channel it would sit in the same ordered
+queue as the snapshots, so somebody holding the talk key would add a frame of latency to
+everybody's movement — and on a server where a run is counted in ticks, latency must not
+depend on whether anybody is talking. The speaker id is stamped from the transport's
+sender and never read out of the payload.
+
+Its default channel is **ALL**, which is the opposite of game-arena's, and both are
+right: an arena is a room, and a course is long and thin with half the server two
+hundred metres away.
+
 ## Validating
 
 ```bash
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_run.tscn   # 91 checks
-godot --headless --path . res://examples/headless_net.tscn   # 85 checks
-godot --headless --path . res://examples/dedicated.tscn      # 52 checks
+godot --headless --path . res://examples/headless_run.tscn   # 110 checks
+godot --headless --path . res://examples/headless_net.tscn   # 90 checks
+godot --headless --path . res://examples/dedicated.tscn      # 107 checks
 godot --headless --path . res://examples/jitter_probe.tscn   # 4 configurations
+godot --headless --path . res://examples/headless_imported.tscn  # 20 per imported map
 ```
+
+`headless_imported` skips cleanly when `maps/imported/` is empty, because an imported
+map is optional content and a fresh clone that has never run the importer is not
+broken. It iterates whatever is there rather than naming a map, for the reason the
+catalogue does.
 
 `jitter_probe` is the only one that measures a **rendered frame** rather than a
 simulated tick, which is the whole class of bug the others cannot reach. See
@@ -452,12 +633,123 @@ Verified with a real click in headless Chromium: `document.pointerLockElement` i
 before and set after. `tools/browser_check.mjs` never clicks, which is why nothing had
 exercised this.
 
+## Decision 11: a Source map is content, and it is read rather than rebuilt
+
+`tools/bsp_import.py` turns a Counter-Strike: Source `.bsp` into a map this game
+loads: geometry, the textures the file carried inside itself, the lighting its
+compiler baked, and the volumes that catch a player who fell off the ride. It was
+written against `surf_kitsune` and `Surf_Mesa` in `godot/inspirations/`.
+
+**The scale is not converted, because there is nothing to convert.** Source stores map
+coordinates at 0.75 inch per unit and [G2GUnits] already declares exactly that ratio,
+for exactly this reason — a surf ramp imported at the 1-inch figure is a ramp the
+movement cannot hold. A BSP coordinate *is* a genre unit. The whole transform is the
+axis swap, because Source is Z-up and Godot is Y-up:
+
+    godot = (src.x, src.z, -src.y)
+
+**START and END zones are deliberately not guessed.** A `.bsp` is compiled: the brush
+entity that knew "this is the start platform" is gone, and CS:S has no convention that
+survives. `surf_kitsune` drives its stages with
+`OnTrigger !activator,AddOutput,targetname X` and a filter chain, which is a program
+and not a label. What IS reliable is `trigger_teleport` — the pit — and that maps
+exactly onto `DotTimerZone.Kind.RESPAWN`. An imported map arrives playable and
+untimed; the timing zones are a hand-written pass, which is the honest division.
+
+**The mesh is a binary and not a glTF, and the reason is one array.** The baked
+lighting needs `ARRAY_TEX_UV2` to reach the shader, and every route through an
+importer decides for you what a second UV set means: glTF's occlusion channel is
+greyscale, so the coloured neon that is `surf_kitsune`'s entire character goes grey,
+and its emissive channel is additive, so it washes out. Building the [ArrayMesh] from a
+`PackedByteArray` costs one pass and keeps this repository's own convention anyway —
+maps here are made in code.
+
+**Imported maps are discovered, not listed.** `G2GGame._add_imported_maps` scans
+`maps/imported/` for manifests. The three hand-written maps above it are a list because
+they cannot appear without somebody editing this repository; an imported one arrives by
+running a script, and a second place to remember it is the shape that has gone stale
+four times in this tree — `setup.sh`, `tools/check.sh`, `package_check.sh` and the
+bootstrap manifests. The manifest cannot be forgotten, because the map does not load
+without it.
+
+### What building it found
+
+- **`dmodel_t` is 48 bytes and reading it as 52 still produces a perfect world.**
+  Model 0 is the first record, so every field before the overrun lands correctly: the
+  map rendered flawlessly, at the right scale, with correct materials — and every one
+  of the 92 brush models after it was misaligned, so all 53 trigger volumes were
+  garbage. Nothing errored, because a wrong AABB is a legitimate AABB. It showed only
+  because the sizes came out **negative**. The family's own "a value produced correctly
+  and consumed by nothing", with the halves swapped: one consumer was right and the
+  other was reading noise, from the same table.
+
+- **`Image.load_from_file` on a `res://` path works from source and ships nothing.**
+  An export packs the *imported* `.ctex`, not the `.png` the importer consumed, so
+  every texture in the map comes back null in an exported build — which for this game
+  is the browser client, the one target that cannot be debugged by looking at it. Godot
+  says so, in a warning that scrolls past with one per texture. `load()` is correct in
+  both. This is Decision 8's shape again: a development path and a shipped path that
+  are not the same path.
+
+- **VTF mip levels are stored smallest-first**, so mip 0 — the full-size image — is at
+  the *end* of the run. Walking forward and stopping at the first mip is the obvious
+  reading and yields a 1x1 texture stretched over a wall.
+
+- **Ignoring displacements deletes the terrain and nothing says so.** A displacement's
+  face is the flat quad the mapper drew; the real surface is a grid of offsets from it.
+  `Surf_Mesa` has 1434 of them, including ramps players ride, and drawing the quads
+  instead produces a map that is complete, plausible and missing every rock face.
+
+- **You cannot tell "the lightmap is unlit" from "the albedo is black" by looking**,
+  and `surf_kitsune` is 5892 triangles of `tools/toolsblack`. There is no camera angle
+  that separates them, because both render black through a multiply. `bsp_preview`'s
+  `lm` mode overrides every material to show the baked lighting alone, which is the
+  only thing that answers it. The family's "an interface is invisible to assertions",
+  reached through a shader.
+
+- **A script error inside a test aborts THAT TEST and not the run — again.** A call to
+  `DotTimerZoneSet.all()`, which does not exist, removed a check while the suite
+  printed **19 passed, 0 failed**. `headless_imported` asserts its own check count for
+  that reason, which is the guard this tree already knew it needed.
+
+### What is not imported
+
+- **Static props.** `Surf_Mesa` carries 17 `.mdl` models in its pakfile and the
+  `sprp` game lump places them. Reading MDL/VVD/VTX is a second format family and
+  nothing in these two maps' *ride* depends on them — they are scenery. The geometry a
+  player touches is all brushes and displacements, and that is all this reads.
+- **Skyboxes, water, animated and scrolling materials.** Sky faces are skipped, so an
+  imported map has the viewport's background behind it.
+- **Anything from the game's own VPKs.** A `.bsp` embeds only what the mapper added:
+  84% of `surf_kitsune`'s triangles and 91% of `Surf_Mesa`'s. The rest — CS:S stock
+  textures like `concrete/concretefloor039a`, which is the ramp — are painted with the
+  [G2GTextures] role colour instead, which is what an untextured surface means here.
+
+**These maps are third-party work.** `godot/inspirations/` is read-only reference in
+the shape `external-study/` already has: reading a map for its dimensions, its ramp
+angles and its stage layout is the point of having it. Shipping extracted geometry in a
+released game is a different act and needs the author's permission.
+
 ## Things deliberately not here
 
 - **A second transport.** The bridge speaks through `DotClientLink`'s RPCs on one
   `MultiplayerAPI`; browser and desktop clients on one server is the family-wide gap
   in PLATFORM.md.
-- **Props.** This is the timer server. game-playground has the sandbox.
+- **A sandbox.** There are practice blocks now (`sv_props`), and they are deliberately
+  not a sandbox: frozen on placement, admin-only by default, and a run made while
+  anything is placed cannot be ranked. game-playground is the sandbox.
+- **A chat window.** `DotChatClient` holds the history, the channels and the unread
+  counts on the client the moment anybody writes a screen for it; what a player gets
+  today is the HUD's notice line.
+- **A server browser screen.** `G2GQuery` is the server half and has been since the
+  module was written — dot-browser's client half, with sources, filters and
+  favourites, is not wired into `G2GClient`, and nothing has yet asked a real
+  `DotServer` for it.
+- **A map-sync client.** game-arena has one; this game does not need one, because
+  `G2GGame` drives a `DotMapSession` on every instance including a mirroring client
+  and the bridge already sends a map change as a game event. Adding `DotMapSyncClient`
+  on top would be a second thing loading the same map, which is two owners of one
+  world.
 - **A texture set.** `G2GTextures` generates a prototype grid and looks for an
   installed one in `res://textures/prototype/{floor,ramp,start,end,platform,bonus}.png`.
   Kenney's prototype kit is CC0 and is what those files are for; dropping them in

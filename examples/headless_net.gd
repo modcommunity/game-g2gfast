@@ -59,6 +59,7 @@ func _run() -> void:
 		await _test_lossy()
 		await _test_map_change()
 		_test_ghost()
+		_test_voice_wire()
 		_test_leave()
 	_report()
 
@@ -642,3 +643,60 @@ func _test_leave() -> void:
 	_flush()
 	_check(_server_player() == null, "the server drops a leaving peer's player")
 	_check(not _server_net.peers().has(CLIENT_PEER), "and the peer")
+
+
+## A voice frame, client to server to another client, over this game's own link.
+##
+## [b]Deliberately not through [DotNetManager].[/b] dot-net decodes a bit-packed
+## message against a sealed schema; a voice frame is an opaque blob from a codec, and
+## putting it through would mean a message type per codec — or a schema that changes
+## when the codec does, and the schema hash is what both ends check to agree they are
+## speaking the same game. So it rides its own channel and its own two calls.
+func _test_voice_wire() -> void:
+	_section("voice over the link")
+
+	var relayed: Array[Dictionary] = []
+	var heard: Array[PackedByteArray] = []
+
+	_server_bridge.voice_relay_fn = func(speaker: int, bytes: PackedByteArray) -> void:
+		relayed.append({"speaker": speaker, "bytes": bytes})
+		# Straight back out, which is what DotVoiceRouter does once it has decided
+		# who hears it. The router itself is checked on a real server in `dedicated`.
+		_server_bridge.link.send_voice(CLIENT_PEER, bytes)
+
+	_client_bridge.voice_in_fn = func(bytes: PackedByteArray) -> void:
+		heard.append(bytes)
+
+	var frame := PackedByteArray([9, 8, 7, 6, 5, 4, 3, 2])
+	_client_bridge.link.send_voice_frame(frame)
+	_flush()
+
+	_check(relayed.size() == 1, "a captured frame reaches the server")
+
+	if not relayed.is_empty():
+		# [b]The speaker is stamped from the transport, never read out of the
+		# payload.[/b] A client that could name its own speaker id could put words in
+		# anybody's mouth, and the only symptom is words coming out of the wrong
+		# player — which nobody would report as a security problem.
+		_check(
+			int(relayed[0]["speaker"]) == CLIENT_PEER,
+			"stamped with the peer the transport reported",
+			str(relayed[0]["speaker"])
+		)
+		_check(
+			(relayed[0]["bytes"] as PackedByteArray) == frame,
+			"and the bytes are unchanged"
+		)
+
+	_flush()
+	_check(heard.size() == 1, "and the relay reaches a listener")
+
+	# Never a broadcast. `send(bytes, 0)` is how this family last delivered a private
+	# message to every client at once, and a voice packet sent to peer 0 would be
+	# exactly that bug with audio in it.
+	var before := _server_bridge.link.voice_sent
+	_server_bridge.link.send_voice(0, frame)
+	_check(
+		_server_bridge.link.voice_sent == before,
+		"and a voice frame addressed to peer 0 is refused rather than broadcast"
+	)

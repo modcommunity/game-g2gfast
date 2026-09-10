@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+"""Read a Source VBSP (v19/v20) far enough to get geometry and zones out of it.
+
+Point it at a Counter-Strike: Source surf or bhop map and it writes an .obj of the
+world geometry and a .json of the entities that become timer zones and spawns.
+
+    tools/bsp_read.py ../inspirations/g2gfast/surf_kitsune.bsp out/
+
+Why this is only a reader and not an importer: what a *map* is here is a
+`G2GMap` subclass with `_build()` and `timer_zones()` (see maps/surf_g2g_intro.gd),
+and the interesting decisions -- which volume is the START, which of thirty
+materials is a ramp, what a stage is -- are judgement calls that differ per map.
+Those belong in a hand-written map script that reads this output, not in a
+converter guessing at them.
+
+[b]Units.[/b] Source stores map coordinates in the same units this game is
+authored in -- `G2GUnits.METRES_PER_UNIT` is 0.01905, which is the Source ratio of
+0.75 inch per unit -- so nothing is scaled here. Only the axes are swapped, because
+Source is Z-up and Godot is Y-up:
+
+    godot = (src.x, src.z, -src.y)
+
+Emitting metres instead would be the obvious alternative and is wrong: every other
+number in this project (`fallback_spawn_units`, `zone_box`, every tunable) is in
+genre units, and a map file that mixed the two is a map file nobody can read.
+Multiply by `G2GUnits.METRES_PER_UNIT` at the same single boundary everything else
+does.
+"""
+
+import collections
+import json
+import os
+import re
+import struct
+import sys
+
+# Surface flags worth skipping. Tool textures are not geometry a player touches:
+# they are the compiler's own annotations and drawing them buries the map in boxes.
+SURF_SKY2D, SURF_SKY, SURF_TRIGGER, SURF_NODRAW = 0x2, 0x4, 0x40, 0x80
+SURF_HINT, SURF_SKIP = 0x100, 0x200
+SKIP_MASK = SURF_SKY2D | SURF_SKY | SURF_TRIGGER | SURF_NODRAW | SURF_HINT | SURF_SKIP
+
+LUMP_ENTITIES, LUMP_TEXDATA, LUMP_VERTEXES = 0, 2, 3
+LUMP_PLANES = 1
+LUMP_TEXINFO, LUMP_FACES, LUMP_EDGES, LUMP_SURFEDGES = 6, 7, 12, 13
+LUMP_MODELS, LUMP_DISPINFO, LUMP_DISP_VERTS = 14, 26, 33
+LUMP_TEXDATA_STRING_DATA, LUMP_TEXDATA_STRING_TABLE = 43, 44
+
+# dmodel_t is 48 bytes: mins, maxs, origin, headnode, firstface, numfaces.
+# Reading it as 9f4i (52) still yields a correct model 0 -- it is the first record
+# and every field before the overrun is in place -- and misaligns every model after
+# it, so the world renders perfectly while every trigger volume is garbage. That
+# cost a pass here; the sizes came out negative, which is the only reason it showed.
+FMT_MODEL = "<9f3i"
+FMT_FACE = "<HBBihhhh4sifiiiiiHHI"   # 56 bytes, v20
+FMT_TEXINFO = "<16f2i"               # 72
+FMT_TEXDATA = "<3f5i"                # 32
+FMT_DISPVERT = "<3fff"               # 20
+
+
+class Bsp:
+    def __init__(self, path):
+        self.path = path
+        self.d = open(path, "rb").read()
+        ident, self.version = struct.unpack_from("<4si", self.d, 0)
+        if ident != b"VBSP":
+            raise ValueError("%s is not a VBSP file (magic %r)" % (path, ident))
+        self.dir = [struct.unpack_from("<iii4s", self.d, 8 + i * 16)[:3] for i in range(64)]
+
+    def _lump(self, i):
+        off, ln, _ = self.dir[i]
+        return self.d[off:off + ln]
+
+    def _array(self, i, fmt):
+        b, sz = self._lump(i), struct.calcsize(fmt)
+        return [struct.unpack_from(fmt, b, o) for o in range(0, len(b) - sz + 1, sz)]
+
+    def load(self):
+        # normal(3f), dist(f), type(i). Wanted for exact face normals: a brush face
+        # lies on its plane by construction, so deriving a normal from the winding
+        # instead is strictly less accurate and flips on a degenerate first triangle.
+        self.planes = self._array(LUMP_PLANES, "<4fi")
+        self.verts = self._array(LUMP_VERTEXES, "<3f")
+        self.edges = self._array(LUMP_EDGES, "<2H")
+        self.surfedges = [x[0] for x in self._array(LUMP_SURFEDGES, "<i")]
+        self.texinfo = self._array(LUMP_TEXINFO, FMT_TEXINFO)
+        self.texdata = self._array(LUMP_TEXDATA, FMT_TEXDATA)
+        self.faces = self._array(LUMP_FACES, FMT_FACE)
+        self.models = self._array(LUMP_MODELS, FMT_MODEL)
+        self.dispinfo = self._lump(LUMP_DISPINFO)
+        self.dispverts = self._array(LUMP_DISP_VERTS, FMT_DISPVERT)
+        table = [x[0] for x in self._array(LUMP_TEXDATA_STRING_TABLE, "<i")]
+        data = self._lump(LUMP_TEXDATA_STRING_DATA)
+        self.texnames = [data[o:data.index(b"\0", o)].decode("ascii", "replace") for o in table]
+        self.entities = parse_entities(self._lump(LUMP_ENTITIES).decode("ascii", "replace"))
+        return self
+
+    # -- faces -----------------------------------------------------------
+    def face_material(self, f):
+        ti = f[5]
+        if ti < 0:
+            return "?", 0
+        flags, td = int(self.texinfo[ti][16]), int(self.texinfo[ti][17])
+        if not 0 <= td < len(self.texdata):
+            return "?", flags
+        return self.texnames[self.texdata[td][3]], flags
+
+    def face_points(self, f):
+        first, n = f[3], f[4]
+        pts = []
+        for k in range(n):
+            se = self.surfedges[first + k]
+            e = self.edges[abs(se)]
+            pts.append(self.verts[e[0] if se >= 0 else e[1]])
+        return pts
+
+    def model_faces(self, model=0):
+        m = self.models[model]
+        return self.faces[m[10]:m[10] + m[11]]
+
+    def model_bounds(self, model):
+        m = self.models[model]
+        return (m[0], m[1], m[2]), (m[3], m[4], m[5])
+
+    # -- displacements ---------------------------------------------------
+    def displacement_tris(self, f):
+        """A displacement's subdivided surface.
+
+        The face is the flat quad the mapper drew; the real surface is a
+        (2^power + 1) square grid of offsets from it. Ignoring these and drawing
+        the quad is the obvious shortcut and it deletes every piece of terrain in
+        the map -- 1434 of them in Surf_Mesa, including ramps players ride.
+        """
+        o = f[6] * 176
+        start = struct.unpack_from("<3f", self.dispinfo, o)
+        vstart, _tstart, power = struct.unpack_from("<3i", self.dispinfo, o + 12)
+        c = self.face_points(f)
+        if len(c) != 4:
+            return []
+        # The grid is laid out from the corner nearest startPosition, which is not
+        # necessarily the first vertex of the face winding.
+        best = min(range(4), key=lambda k: sum((c[k][a] - start[a]) ** 2 for a in range(3)))
+        c = c[best:] + c[:best]
+        size = (1 << power) + 1
+        grid = []
+        for row in range(size):
+            t = row / (size - 1)
+            lft = [c[0][a] + (c[1][a] - c[0][a]) * t for a in range(3)]
+            rgt = [c[3][a] + (c[2][a] - c[3][a]) * t for a in range(3)]
+            for col in range(size):
+                s = col / (size - 1)
+                base = [lft[a] + (rgt[a] - lft[a]) * s for a in range(3)]
+                dv = self.dispverts[vstart + row * size + col]
+                grid.append(tuple(base[a] + dv[a] * dv[3] for a in range(3)))
+        tris = []
+        for row in range(size - 1):
+            for col in range(size - 1):
+                a = row * size + col
+                tris.append((grid[a], grid[a + size], grid[a + 1]))
+                tris.append((grid[a + 1], grid[a + size], grid[a + size + 1]))
+        return tris
+
+
+def to_godot(p):
+    """Source Z-up to Godot Y-up, in genre units. See the module docstring."""
+    return (p[0], p[2], -p[1])
+
+
+def parse_entities(text):
+    out = []
+    for blk in re.findall(r"\{([^{}]*)\}", text):
+        kv = {}
+        for k, v in re.findall(r'"([^"]*)"\s*"([^"]*)"', blk):
+            kv.setdefault(k, v)
+        if kv:
+            out.append(kv)
+    return out
+
+
+def clean_material(m):
+    """The base material name.
+
+    VBSP rewrites the name of any face a cubemap patched into
+    `maps/<mapname>/<path>_<x>_<y>_<z>`, so the same texture appears under a dozen
+    names and grouping by the raw string scatters one surface across the map.
+    """
+    m = m.lower()
+    m = re.sub(r"^maps/[^/]+/", "", m)
+    return re.sub(r"_-?\d+_-?\d+_-?\d+$", "", m)
+
+
+def write_obj(bsp, out_path):
+    groups = collections.defaultdict(list)
+    for f in bsp.model_faces(0):
+        mat, flags = bsp.face_material(f)
+        if flags & SKIP_MASK:
+            continue
+        g = clean_material(mat)
+        if f[6] >= 0:
+            groups[g].extend(bsp.displacement_tris(f))
+        else:
+            p = bsp.face_points(f)
+            for k in range(1, len(p) - 1):
+                groups[g].append((p[0], p[k], p[k + 1]))
+
+    index, verts, body = {}, [], []
+
+    def idx(p):
+        q = to_godot(p)
+        q = (round(q[0], 4), round(q[1], 4), round(q[2], 4))
+        if q not in index:
+            index[q] = len(verts) + 1
+            verts.append(q)
+        return index[q]
+
+    for g in sorted(groups):
+        name = g.replace("/", "_")
+        body.append("g %s\nusemtl %s" % (name, name))
+        for t in groups[g]:
+            a, b, c = idx(t[0]), idx(t[1]), idx(t[2])
+            if a == b or b == c or a == c:
+                continue          # degenerate after rounding; Godot drops these anyway
+            body.append("f %d %d %d" % (a, b, c))
+    with open(out_path, "w") as fh:
+        fh.write("# %s -- world geometry in GENRE UNITS, Godot axes\n" % os.path.basename(bsp.path))
+        fh.write("# multiply by G2GUnits.METRES_PER_UNIT for metres\n")
+        for v in verts:
+            fh.write("v %.4f %.4f %.4f\n" % v)
+        fh.write("\n".join(body) + "\n")
+    return len(verts), sum(len(v) for v in groups.values()), sorted(groups)
+
+
+# Entities worth carrying across. Everything else in a CS:S map is round logic,
+# weapons and decoration this game has no use for.
+WANTED = {
+    "info_player_terrorist", "info_player_counterterrorist", "info_player_start",
+    "info_teleport_destination", "trigger_teleport", "trigger_multiple",
+    "trigger_once", "trigger_push", "trigger_hurt", "func_button", "worldspawn",
+}
+
+
+def write_entities(bsp, out_path):
+    out = []
+    for e in bsp.entities:
+        cls = e.get("classname", "")
+        if cls not in WANTED:
+            continue
+        rec = {k: v for k, v in e.items() if k != "hammerid"}
+        if "origin" in e:
+            try:
+                p = [float(x) for x in e["origin"].split()]
+                rec["origin_godot"] = list(to_godot(p))
+            except ValueError:
+                pass
+        model = e.get("model", "")
+        if model.startswith("*"):
+            mi = int(model[1:])
+            if mi < len(bsp.models):
+                mins, maxs = bsp.model_bounds(mi)
+                a, b = to_godot(mins), to_godot(maxs)
+                rec["aabb_min_godot"] = [min(a[i], b[i]) for i in range(3)]
+                rec["aabb_max_godot"] = [max(a[i], b[i]) for i in range(3)]
+        out.append(rec)
+    with open(out_path, "w") as fh:
+        json.dump({"source": os.path.basename(bsp.path), "units": "genre units, Godot axes",
+                   "entities": out}, fh, indent=1)
+    return len(out)
+
+
+def main(argv):
+    if len(argv) < 3:
+        print(__doc__.strip().splitlines()[2].strip())
+        print("usage: bsp_read.py <map.bsp> <out-dir>")
+        return 2
+    src, out_dir = argv[1], argv[2]
+    os.makedirs(out_dir, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(src))[0].lower()
+    bsp = Bsp(src).load()
+    mins, maxs = bsp.model_bounds(0)
+    obj = os.path.join(out_dir, stem + ".obj")
+    ents = os.path.join(out_dir, stem + "_entities.json")
+    nv, nt, mats = write_obj(bsp, obj)
+    ne = write_entities(bsp, ents)
+    print("%s  VBSP v%d" % (os.path.basename(src), bsp.version))
+    print("  world  %.0f x %.0f x %.0f units" % tuple(maxs[i] - mins[i] for i in range(3)))
+    print("  %s  %d verts, %d tris, %d materials" % (obj, nv, nt, len(mats)))
+    print("  %s  %d entities" % (ents, ne))
+    print("  materials: %s" % ", ".join(mats[:8]) + (" ..." if len(mats) > 8 else ""))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -21,6 +21,13 @@ var net: DotNetManager = null
 var bridge: G2GNetBridge = null
 var link: Node = null
 
+## Chat and voice: the client halves of what [G2GServices] runs on the server.
+##
+## Null offline, deliberately. Both are about a server telling this client something,
+## and an offline game has nobody to be told by — building them anyway would open a
+## microphone in a single-player run.
+var extras: G2GClientExtras = null
+
 ## Play alone even when a link is available. `--offline`.
 @export var force_offline: bool = false
 
@@ -186,6 +193,21 @@ func _build_netcode() -> DotResult:
 		return attached
 
 	net.messages.seal()
+
+	# The client halves. Built here rather than in `_ready` because both need the
+	# bridge, and there is no bridge offline.
+	extras = G2GClientExtras.new()
+	extras.name = "Extras"
+	add_child(extras)
+
+	var extra := extras.attach(bridge, game)
+	DotLog.result("g2g.client", "the client's chat and voice", extra)
+
+	extras.line_received.connect(func(text: String) -> void:
+		if hud != null:
+			hud.notice(text)
+	)
+
 	bridge.hello_received.connect(_on_hello)
 	bridge.finish_received.connect(func(pid: int, time: float, rank: int) -> void:
 		if hud != null and pid == bridge.local_player_id:
@@ -288,7 +310,23 @@ func _unhandled_input(event: InputEvent) -> void:
 			sampler.handle_event(event)
 		return
 
-	if not (event is InputEventKey) or not event.is_pressed() or event.is_echo():
+	if not (event is InputEventKey) or event.is_echo():
+		return
+
+	# Push to talk, handled BEFORE the "is this a press" filter below, because a talk
+	# key needs its release as much as its press: a key whose release nobody reads is
+	# a microphone that never closes.
+	#
+	# [b]K, not V.[/b] V is this game's second checkpoint key and has been since the
+	# client was written; the genre's own voice key is unbound here because the genre
+	# binds it per player. K is what is left that nothing else claims.
+	if (event as InputEventKey).physical_keycode == KEY_K:
+		if extras != null:
+			extras.set_talking(event.is_pressed())
+
+		return
+
+	if not event.is_pressed():
 		return
 
 	match (event as InputEventKey).physical_keycode:

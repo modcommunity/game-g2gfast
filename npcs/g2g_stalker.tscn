@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://npcs/g2g_hunter_body.gd" id="1_body"]
+
+[node name="Stalker" type="CharacterBody3D"]
+script = ExtResource("1_body")
+body_radius = 0.34
+body_height = 1.55
+tint = Color(0.80, 0.28, 0.30, 1)

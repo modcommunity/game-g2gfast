@@ -122,6 +122,37 @@ extends DotConfig
 ## names and times off the server, and that is an operator's decision.
 @export var report_to_backbone: bool = false
 
+## Whether the server counts per-player statistics and awards achievements.
+##
+## [b]On, and it is cheap, but it is a switch rather than an assumption.[/b] A server
+## that keeps lifetime numbers is one that writes a file per player, and an operator
+## running a scratch instance or a LAN night should be able to say no. It is also what
+## a client sets false — a mirroring client that counted its own finishes would file
+## everybody's runs a second time.
+@export var keep_progress: bool = true
+
+@export_group("Modes")
+
+## Whether players can shoot each other. `sv_deathmatch`.
+##
+## Off. This is a timer server. While it is on the timer still runs — a player who
+## came to run must not be stopped by a player who came to shoot — so what it adds is
+## hitboxes, health, an arsenal and a scoreboard, and it takes nothing away.
+@export var deathmatch: bool = false
+
+## Whether hunters walk the course. `sv_hunters`.
+##
+## Off. A hunter cannot catch a runner who is running well — the fastest one does
+## 8 m/s and a bhop player on a good line does forty — so what it punishes is
+## stopping, which is what the timer already punishes.
+@export var hunters: bool = false
+
+## Whether an admin can place practice blocks. `sv_props`.
+##
+## Off, and while it is on a run made with anything placed is refused a record. A
+## board with one time set over a placed block is a board nobody trusts.
+@export var placeable_props: bool = false
+
 @export_group("Role")
 
 ## Whether this instance times, ranks and decides. A client sets this false.

@@ -28,6 +28,15 @@ const NODE_NAME := &"G2G"
 ## of snapshots delay a chat line, and vice versa.
 const CHANNEL_STATE := 1
 
+## Voice rides its own channel, and that is not a nicety.
+##
+## A talk spurt is fifty frames a second per speaker relayed to every listener. On the
+## state channel it would sit in the same ordered queue as the snapshots, so somebody
+## holding the talk key would add a frame of latency to everybody's movement — and on
+## a server where a run is counted in ticks, latency is the one thing that must not
+## depend on whether anybody is talking.
+const CHANNEL_VOICE := 2
+
 ## The bridge these calls are delivered to. Set by whoever creates this node.
 var bridge: G2GNetBridge = null
 
@@ -56,6 +65,8 @@ var inputs_sent: int = 0
 var inputs_received: int = 0
 var requests_sent: int = 0
 var requests_received: int = 0
+var voice_sent: int = 0
+var voice_received: int = 0
 
 
 static func attached_to(parent: Node, p_bridge: G2GNetBridge, server: bool) -> G2GNetLink:
@@ -175,6 +186,58 @@ func _net_request(payload: PackedByteArray) -> void:
 
 ## Hands a payload to this end as though it had arrived over the wire.
 ##
+## One encoded voice frame, server to one listener.
+##
+## [b]Never a broadcast.[/b] [DotVoiceRouter] decides who hears a speaker, and a
+## `send(bytes, 0)` convention here would quietly deliver a proximity packet to the
+## whole server — which is the bug this family has already shipped once, through a bot
+## registered as peer 0.
+func send_voice(peer_id: int, payload: PackedByteArray) -> void:
+	if not _live() or peer_id <= 0:
+		return
+
+	voice_sent += 1
+
+	if loopback.is_valid():
+		loopback.call(&"voice", peer_id, payload)
+	else:
+		_net_voice.rpc_id(peer_id, payload)
+
+
+## One captured voice frame, client to server.
+func send_voice_frame(payload: PackedByteArray) -> void:
+	if not _live():
+		return
+
+	voice_sent += 1
+
+	if loopback.is_valid():
+		loopback.call(&"voice_frame", 1, payload)
+	else:
+		_net_voice_frame.rpc_id(1, payload)
+
+
+## A relayed voice frame. Unreliable: a lost frame is 20 ms of silence a jitter buffer
+## conceals, and a resent one arrives after the frames either side of it have played.
+@rpc("authority", "unreliable", "call_remote", CHANNEL_VOICE)
+func _net_voice(payload: PackedByteArray) -> void:
+	voice_received += 1
+
+	if bridge != null:
+		bridge.receive_voice(payload)
+
+
+## A client's captured audio. The speaker is stamped by the server from the transport's
+## sender, never read out of the payload — a client that could name its own speaker id
+## could put words in anybody's mouth, and the only symptom is exactly that.
+@rpc("any_peer", "unreliable", "call_remote", CHANNEL_VOICE)
+func _net_voice_frame(payload: PackedByteArray) -> void:
+	voice_received += 1
+
+	if bridge != null:
+		bridge.receive_voice_frame(multiplayer.get_remote_sender_id(), payload)
+
+
 ## What the other end's [member loopback] calls. It goes through the same counters and the
 ## same bridge entry points the RPCs do, so a test exercises the real path minus the
 ## socket.
@@ -195,6 +258,12 @@ func deliver(method: StringName, from_peer_id: int, payload: PackedByteArray) ->
 		&"request":
 			requests_received += 1
 			bridge.receive_request(from_peer_id, payload)
+		&"voice":
+			voice_received += 1
+			bridge.receive_voice(payload)
+		&"voice_frame":
+			voice_received += 1
+			bridge.receive_voice_frame(from_peer_id, payload)
 
 
 func describe() -> Dictionary:
@@ -204,4 +273,5 @@ func describe() -> Dictionary:
 		"events": [events_sent, events_received],
 		"inputs": [inputs_sent, inputs_received],
 		"requests": [requests_sent, requests_received],
+		"voice": [voice_sent, voice_received],
 	}

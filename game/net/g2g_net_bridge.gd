@@ -40,6 +40,19 @@ var game: G2GGame = null
 var net: DotNetManager = null
 var link: G2GNetLink = null
 
+## [code]func(bytes: PackedByteArray) -> void[/code]. Where a received voice frame goes
+## on a client. The client points it at `DotVoiceManager.receive`.
+##
+## A callable rather than a typed reference, because this file must not name dot-voice:
+## a build with no voice addon installed would otherwise fail to parse, and the whole
+## point of a bridge is that it is the only file naming two things at once.
+var voice_in_fn: Callable = Callable()
+
+## [code]func(speaker_peer: int, bytes: PackedByteArray) -> void[/code]. Where a
+## client's captured audio goes on a server. [G2GServices] points it at
+## `DotVoiceRouter.relay`.
+var voice_relay_fn: Callable = Callable()
+
 ## Which session this process is. Zero on a server.
 var local_player_id: int = 0
 
@@ -424,6 +437,33 @@ func receive_request(peer_id: int, payload: PackedByteArray) -> DotResult:
 	return net.receive(payload, peer_id)
 
 
+## A relayed voice frame arrived. Client side.
+##
+## [b]Deliberately NOT routed through [DotNetManager].[/b] dot-net's `receive` decodes
+## a bit-packed message against a sealed schema and applies the payload cap and the
+## rate limit that go with it; a voice frame is an opaque blob from a codec and has
+## nothing to do with the replication wire. Putting it through would mean either a
+## message type per codec or a schema that changes when the codec does — and the
+## schema hash is what both ends check to agree they are speaking the same game.
+func receive_voice(payload: PackedByteArray) -> DotResult:
+	if not voice_in_fn.is_valid():
+		return DotResult.fail(DotError.CODE_STATE, "Nothing here plays voice.")
+
+	voice_in_fn.call(payload)
+	return DotResult.success(payload.size())
+
+
+## A client's captured audio arrived. Server side.
+##
+## The speaker is [param peer_id], which the transport reported. It is never read out
+## of the payload: a client that could name its own speaker id could put words in
+## anybody's mouth.
+func receive_voice_frame(peer_id: int, payload: PackedByteArray) -> DotResult:
+	if not voice_relay_fn.is_valid():
+		return DotResult.fail(DotError.CODE_STATE, "This end does not relay voice.")
+
+	voice_relay_fn.call(peer_id, payload)
+	return DotResult.success(payload.size())
 # --- Server: what a joining peer is told ------------------------------------
 
 func _admit(peer_id: int) -> void:

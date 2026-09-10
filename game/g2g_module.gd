@@ -15,6 +15,15 @@ const CHANNEL := "g2g.module"
 var game: G2GGame = null
 var net: DotNetManager = null
 var bridge: G2GNetBridge = null
+
+## Chat, voice and moderation. See [G2GServices].
+var services: G2GServices = null
+
+## Content, profiles, avatars and admission. See [G2GIdentity].
+var identity: G2GIdentity = null
+
+## The ballot. What replaces the rock-the-vote this game shipped with.
+var vote: G2GVote = null
 var _painters: Dictionary = {}
 var _tick: int = 0
 var _joined: Dictionary = {}
@@ -109,6 +118,50 @@ func _module_load() -> DotResult:
 	add_command("thirdperson", _cmd_thirdperson, "Third-person view", "").with_chat()
 	add_command("firstperson", _cmd_firstperson, "First-person view", "").with_chat()
 
+	# --- Mode cvars, live -------------------------------------------------------
+	#
+	# Each one flips a layer that is already built. A layer constructed on the cvar
+	# instead would be constructed under live players, which is where the interesting
+	# failures are — and it would have to be torn down again on the way back.
+	add_cvar("sv_deathmatch", "1" if game.config.deathmatch else "0",
+		"Whether players can shoot each other.").changed.connect(
+		func(_old: String, new_value: String) -> void:
+			game.config.deathmatch = new_value != "0"
+
+			if game.combat != null:
+				game.combat.enabled = game.config.deathmatch
+			elif game.config.deathmatch:
+				log_warn("deathmatch cannot be turned on", {
+					"why": "this server booted without it; restart with sv_deathmatch 1"
+				})
+	)
+
+	add_cvar("sv_hunters", "1" if game.config.hunters else "0",
+		"Whether hunters walk the course.").changed.connect(
+		func(_old: String, new_value: String) -> void:
+			game.config.hunters = new_value != "0"
+
+			if game.hunters == null:
+				return
+
+			game.hunters.enabled = game.config.hunters
+
+			# Off takes them away now rather than waiting for the next map — the same
+			# rule `sv_replay_bot` follows, and for the same reason: an operator who
+			# turns something off wants it gone.
+			if not game.config.hunters:
+				game.hunters.clear()
+	)
+
+	add_cvar("sv_props", "1" if game.config.placeable_props else "0",
+		"Whether practice blocks may be placed.").changed.connect(
+		func(_old: String, new_value: String) -> void:
+			game.config.placeable_props = new_value != "0"
+
+			if game.props != null and not game.config.placeable_props:
+				game.props.clear()
+	)
+
 	server.client_disconnected.connect(_on_client_disconnected)
 	hook_post("client_spawn", _on_client_spawn)
 	hook_post("player_avatar_changed", _on_avatar_changed)
@@ -124,8 +177,269 @@ func _module_load() -> DotResult:
 	if not provided.ok:
 		DotLog.info(CHANNEL, "no query provider", {"why": provided.error.message})
 
+	# Everything below runs the server rather than the game, and each one logs and
+	# continues rather than refusing to load: a module that would not load because a
+	# punishment file was unreadable is a module that takes the game down over a
+	# permissions mistake, and the game is what the players came for.
+	var identified: DotResult = await _build_identity()
+	DotLog.result(CHANNEL, "the identity layer", identified)
+
+	var serviced: DotResult = await _build_services()
+	DotLog.result(CHANNEL, "chat, voice and moderation", serviced)
+
+	var voted := _build_vote()
+	DotLog.result(CHANNEL, "the vote", voted)
+
+	_add_server_commands()
+
 	log_info("g2gfast loaded", {"autobhop": game.config.auto_bhop, "tick_rate": game.tick_rate})
 	return DotResult.success(null)
+
+
+## dot-platform's own module, loaded beside this one.
+##
+## A PATH, because `DotModuleHost.load_module` takes one and constructs the module
+## itself — so a pre-built instance with its hub assigned would be thrown away and a
+## fresh one made with a null. dot-platform's module falls back to
+## `DotRegistry.get_service(DotPlatformHub.SERVICE)` for exactly this, which is why
+## [G2GIdentity] registers the hub.
+const PLATFORM_MODULE_PATH := "res://addons/dot_platform/dot_platform_module.gd"
+
+
+func _build_identity() -> DotResult:
+	identity = G2GIdentity.new()
+	identity.name = "Identity"
+	identity.report_to_backbone = game.config.report_to_backbone
+	add_child(identity)
+
+	var ready: DotResult = await identity.setup()
+
+	if not ready.ok:
+		remove_child(identity)
+		identity.queue_free()
+		identity = null
+		return ready
+
+	if server.modules != null and not server.modules.has_module("platform"):
+		var loaded := server.modules.load_module(PLATFORM_MODULE_PATH)
+
+		if not loaded.ok:
+			return loaded.wrap("The platform module would not load")
+
+	return DotResult.success(identity)
+
+
+func _build_services() -> DotResult:
+	services = G2GServices.new()
+	services.name = "Services"
+	add_child(services)
+
+	var ready: DotResult = await services.setup(server, game, bridge.link)
+
+	if not ready.ok:
+		remove_child(services)
+		services.queue_free()
+		services = null
+		return ready
+
+	if services.voice != null and bridge != null:
+		bridge.voice_relay_fn = services.relay_voice
+
+	services.command_entered.connect(_on_chat_command)
+
+	return DotResult.success(services)
+
+
+func _build_vote() -> DotResult:
+	vote = G2GVote.new()
+	vote.name = "Vote"
+	vote.game = game
+	vote.authoritative = true
+	add_child(vote)
+
+	vote.announce_fn = func(line: String) -> void:
+		if services != null:
+			services.announce(line)
+		else:
+			server.broadcast_message(line)
+
+	vote.is_admin_fn = func(voter: StringName) -> bool:
+		var session := server.session_by_userid(G2GCombat.entity_id_for(voter))
+		return session != null and session.permissions.has(DotAdminFlags.CHANGEMAP)
+
+	var ready := vote.setup()
+
+	if not ready.ok:
+		remove_child(vote)
+		vote.queue_free()
+		vote = null
+		return ready
+
+	return DotResult.success(vote)
+
+
+## The commands that only exist once the optional halves loaded.
+func _add_server_commands() -> void:
+	if vote != null:
+		add_command("nominate", _cmd_nominate,
+			"Nominate a map: !nominate <id>", "").with_chat()
+		add_command("nextmap", _cmd_nextmap, "What plays next", "").with_chat()
+		add_command("timeleft", _cmd_timeleft, "How long this map has", "").with_chat()
+		add_command("g2g_vote", _cmd_open_vote, "Open a vote now", DotAdminFlags.VOTE)
+
+	if services != null:
+		add_command("g2g_services", _cmd_services,
+			"Chat, voice and moderation", DotAdminFlags.GENERIC)
+
+	if identity != null:
+		add_command("g2g_identity", _cmd_identity,
+			"The platform layer", DotAdminFlags.GENERIC)
+
+	if game.progress != null:
+		add_command("stats", _cmd_stats, "Your numbers on this server", "").with_chat()
+
+	if game.hunters != null:
+		add_command("g2g_hunt", _cmd_hunt,
+			"Show or clear the hunters", DotAdminFlags.GENERIC)
+
+	if game.props != null:
+		add_command("g2g_place", _cmd_place,
+			"Place a block where you are looking", DotAdminFlags.CHANGEMAP)
+		add_command("g2g_place_undo", _cmd_place_undo,
+			"Take the last block back", DotAdminFlags.CHANGEMAP)
+		add_command("g2g_place_clear", _cmd_place_clear,
+			"Clear every placed block", DotAdminFlags.CHANGEMAP)
+
+
+func _cmd_nominate(ctx: DotCmdContext) -> void:
+	if ctx.args.is_empty():
+		ctx.reply("Usage: !nominate <map>")
+		return
+
+	var res := vote.nominate(_caller_id(ctx), StringName(ctx.args[0]))
+	ctx.reply("Nominated." if res.ok else res.error.message)
+
+
+func _cmd_nextmap(ctx: DotCmdContext) -> void:
+	ctx.reply("Next: %s" % vote.next_map())
+
+
+func _cmd_timeleft(ctx: DotCmdContext) -> void:
+	ctx.reply(vote.timeleft_line())
+
+
+func _cmd_open_vote(ctx: DotCmdContext) -> void:
+	var opened := vote.director.open_vote(DotVoteClock.REASON_MANUAL)
+	ctx.reply("Vote opened." if opened.ok else opened.error.message)
+
+
+func _cmd_services(ctx: DotCmdContext) -> void:
+	ctx.reply_lines(services.describe_lines())
+
+
+func _cmd_identity(ctx: DotCmdContext) -> void:
+	ctx.reply_lines(identity.describe_lines())
+
+
+func _cmd_stats(ctx: DotCmdContext) -> void:
+	var id := _caller_id(ctx)
+
+	if id == &"":
+		ctx.reply("Only a player has numbers.")
+		return
+
+	var values := game.progress.session_values(id)
+
+	ctx.reply("Runs: %d started, %d finished" % [
+		int(values.get_value(G2GStats.RUNS_STARTED, 0.0)),
+		int(values.get_value(G2GStats.RUNS_FINISHED, 0.0)),
+	])
+	ctx.reply("Jumps: %d, %.0f%% perfect" % [
+		int(values.get_value(G2GStats.JUMPS, 0.0)),
+		G2GStats.perfect_ratio_of(values) * 100.0,
+	])
+	ctx.reply("Top speed: %.0f u/s over %.0f m" % [
+		values.get_value(G2GStats.TOP_SPEED, 0.0),
+		values.get_value(G2GStats.DISTANCE, 0.0),
+	])
+	ctx.reply("Achievement points: %d" % game.progress.points_of(id))
+
+
+func _cmd_hunt(ctx: DotCmdContext) -> void:
+	if not ctx.args.is_empty() and ctx.args[0] == "clear":
+		ctx.reply("Removed %d hunter(s)." % game.hunters.clear())
+		return
+
+	ctx.reply_lines(game.hunters.describe_lines())
+
+
+func _cmd_place(ctx: DotCmdContext) -> void:
+	var player := _caller(ctx)
+
+	if player == null:
+		ctx.reply("Stand somewhere first.")
+		return
+
+	var which: StringName = (
+		StringName(ctx.args[0]) if not ctx.args.is_empty() else G2GProps.BLOCK
+	)
+
+	# Where they are looking, four metres out. The same "mark where you stand" idea
+	# `g2g_zone_mark` uses, one step in front so the block is not inside the admin.
+	var at := player.eye_position() + player.aim_direction() * 4.0
+	var made := game.props.place(_caller_id(ctx), which, at, true)
+
+	ctx.reply(
+		"Placed %s." % String(which) if made != null
+		else "That block could not be placed."
+	)
+
+
+func _cmd_place_undo(ctx: DotCmdContext) -> void:
+	ctx.reply("Removed." if game.props.undo(_caller_id(ctx)) else "Nothing to remove.")
+
+
+func _cmd_place_clear(ctx: DotCmdContext) -> void:
+	ctx.reply("Cleared %d block(s)." % game.props.clear())
+
+
+## A player typed `!something` that dot-server's own commands did not answer.
+##
+## [b]Claimed, or it is broadcast as chat.[/b] dot-chat holds a command until somebody
+## says they handled it; an unclaimed one with `broadcast_unknown_commands` off is
+## dropped, so a player typing `!rtv` on a server whose vote failed to load would get
+## silence rather than "there is no vote here".
+func _on_chat_command(peer: int, command: String, args: PackedStringArray) -> void:
+	var session := server.session_of(peer)
+
+	if session == null:
+		return
+
+	var voter := _player_id(session)
+
+	match command:
+		"rtv":
+			if vote == null:
+				services.notice(peer, "There is no vote on this server.")
+			else:
+				var res := vote.rock_the_vote(voter)
+				services.notice(peer, "Rocked the vote." if res.ok else res.error.message)
+
+			services.claim_command()
+		"vote":
+			if args.is_empty():
+				services.notice(peer, "Usage: !vote <map>")
+			elif vote == null or not vote.is_voting():
+				services.notice(peer, "No vote is open.")
+			else:
+				var res := vote.cast_one(voter, StringName(args[0]))
+				services.notice(peer, "Counted." if res.ok else res.error.message)
+
+			services.claim_command()
+		_:
+			# Left for dot-server's own chat commands, which this game registers with
+			# `.with_chat()` — `!r`, `!wr`, `!top`, `!style`, `!track`.
+			pass
 
 
 func _module_unload() -> void:
@@ -181,11 +495,18 @@ func _build_netcode() -> DotResult:
 	return net.start()
 
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if not loaded or bridge == null:
 		return
 	_tick += 1
 	bridge.server_tick(_tick)
+
+	# The vote clock, from the SIMULATED tick rather than from the frame. dot-vote
+	# says why and it is the same reason dot-map does: a server that stalls should not
+	# lose that time off its map, and a test must be able to run an hour of one in a
+	# millisecond.
+	if vote != null:
+		vote.advance(delta)
 
 
 ## So `changegame` and a vote have something to change to. Ships in the build, so the
@@ -255,6 +576,19 @@ func _on_client_spawn(event: DotEvent) -> void:
 	if session == null or _joined.has(session.userid):
 		return
 
+	# dot-moderation's records, which are not dot-server's ban list.
+	#
+	# [b]dot-server's mute is two booleans on a session object and a session dies with
+	# its connection[/b], so a muted player reconnects and talks. A punishment is a
+	# durable record with an expiry and a scope, and this is the second gate — the
+	# first is dot-server's own admission, which has already run.
+	if services != null:
+		var admitted := services.check_admission(session)
+
+		if not admitted.ok:
+			server.kick(session, admitted.error.message)
+			return
+
 	var added := bridge.add_player(
 		session.peer_id, session.userid, session.display_name, _avatar_for(session)
 	)
@@ -264,9 +598,25 @@ func _on_client_spawn(event: DotEvent) -> void:
 
 	_joined[session.userid] = true
 
+	if services != null:
+		services.add_peer(session.peer_id)
+
 
 func _on_client_disconnected(session: DotClientSession, _reason: String = "") -> void:
 	_painters.erase(_player_id(session))
+
+	if services != null:
+		services.remove_peer(session.peer_id)
+
+	if vote != null:
+		# Their rock-the-vote and their nominations. `rtv_forgets_leavers` decides
+		# whether the tally shrinks with them, and it cannot do its job if nothing
+		# tells it they went.
+		vote.forget_voter(_player_id(session))
+
+	if game != null and game.props != null:
+		game.props.release_player(_player_id(session))
+
 	if _joined.has(session.userid):
 		bridge.remove_peer(session.peer_id)
 		_joined.erase(session.userid)
