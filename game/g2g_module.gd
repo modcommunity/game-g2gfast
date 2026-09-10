@@ -99,6 +99,8 @@ func _module_load() -> DotResult:
 	add_command("g2g_track", _cmd_track, "main, or bonus <n>", "").with_chat()
 	add_command("g2g_top", _cmd_top, "Fastest times here", "").with_chat()
 	add_command("g2g_map", _cmd_map, "Change map, or list them", DotAdminFlags.CHANGEMAP)
+	add_command("g2g_maps_reload", _cmd_maps_reload,
+		"Re-read maps/ from disk, picking up anything dropped in", DotAdminFlags.CHANGEMAP)
 	add_command("g2g_rtv", _cmd_rtv, "Rock the vote", "").with_chat()
 
 	# What twenty years of bhop servers taught everybody's fingers: `!r`, `!wr`,
@@ -804,6 +806,30 @@ func _cmd_map(ctx: DotCmdContext) -> void:
 	var changed: DotResult = await game.change_map(found[0].id)
 	if not changed.ok:
 		ctx.reply_error(changed)
+
+
+## Re-read the map directory on a running server.
+##
+## What makes an imported map worth having is that an operator can drop one in; a
+## server that reads the disk once at boot makes them restart to play it, which on a
+## live server means kicking everybody in order to add a map.
+func _cmd_maps_reload(ctx: DotCmdContext) -> void:
+	var change := game.rescan_maps()
+	var added: Array = change["added"]
+	var removed: Array = change["removed"]
+	var lines := PackedStringArray([
+		"%d maps (%d added, %d removed)" % [change["total"], added.size(), removed.size()]
+	])
+	for id: StringName in added:
+		lines.append("  + %s" % String(id))
+	for id: StringName in removed:
+		lines.append("  - %s" % String(id))
+	# Naming the map still being played is the one thing an operator needs told: it
+	# keeps running, deliberately, and will not be chosen again.
+	if game.maps.current != null and not game.maps.catalogue.has(game.maps.current.id):
+		lines.append("  %s is still being played and is no longer on disk"
+			% String(game.maps.current.id))
+	ctx.reply_lines(lines)
 
 
 func _cmd_rtv(ctx: DotCmdContext) -> void:

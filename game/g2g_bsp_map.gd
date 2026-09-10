@@ -1,11 +1,22 @@
 class_name G2GBspMap
 extends G2GMap
 
-## A map imported from a Source .bsp, built at load from the manifest beside it.
+## A map imported from a Source .bsp, built at load from a manifest anywhere on disk.
 ##
 ## `tools/bsp_import.py` writes a `<id>.json`, a `<id>.bin` and a lightmap atlas; this
-## turns them into geometry, materials and timer zones. A concrete imported map is a
-## four-line subclass that sets [member manifest_path] -- see `maps/surf_kitsune.gd`.
+## turns them into geometry, materials and timer zones.
+##
+## [b]There is no scene and no script per map, and that is what makes a map droppable.[/b]
+## Every imported map is THIS scene -- one `imported_map.tscn` that ships inside the
+## build -- pointed at a different manifest through [member DotMapDef.meta]. The
+## alternative, a generated `<id>.gd` and `<id>.tscn` beside the data, cannot work for a
+## map that arrives after the export: `res://` is a read-only PCK in a shipped build, so
+## a scene that is not in it does not exist, and a script in a mounted dot-cloud pack
+## cannot resolve `class_name` anyway -- this family measured that and wrote it down.
+##
+## So a map is data. It can sit in `res://maps/imported/` in a run from source, in
+## `user://maps/` after something downloaded it, or at any absolute path an operator
+## configured, and the loading path is identical for all three.
 ##
 ## [b]Why the mesh is built here and not imported as a scene.[/b] The baked lighting
 ## needs [constant Mesh.ARRAY_TEX_UV2] to survive to the shader, and every route
@@ -15,6 +26,8 @@ extends G2GMap
 
 const VERTEX_FLOATS := 10          # position 3, normal 3, uv 2, uv2 2
 
+## The manifest this map builds from. Set by [method build_from]; only an editor
+## placement of this scene ever sets it by hand.
 @export_file("*.json") var manifest_path: String = ""
 
 ## Lifts the baked darks so geometry stays readable. See the shader.
@@ -24,9 +37,44 @@ const VERTEX_FLOATS := 10          # position 3, normal 3, uv 2, uv2 2
 var manifest: Dictionary = {}
 var _bounds_min := Vector3.ZERO
 var _bounds_max := Vector3.ZERO
+var _built := false
 
 
+## Nothing is built on entering the tree.
+##
+## [DotMapSession] instantiates a map scene and adds it in one call, with no hook in
+## between, so a node that built itself in `_ready()` would have to know which map it
+## is before anybody could tell it. The host calls [method build_from] instead, from
+## `changed`, which carries both the [DotMapDef] and the node -- and does so before it
+## asks for [method timer_zones], which is the ordering this depends on.
 func _build() -> void:
+	if not manifest_path.is_empty():
+		# An editor placement, or a preview: it was told a manifest up front.
+		build_from_path(manifest_path)
+
+
+## Build this map from the manifest named by a catalogue entry.
+func build_from(map: DotMapDef) -> bool:
+	if map == null:
+		return false
+	var path := str(map.meta.get("manifest", ""))
+	if path.is_empty():
+		push_error("G2GBspMap: %s has no manifest in its catalogue entry" % String(map.id))
+		return false
+	return build_from_path(path)
+
+
+## Build this map from a manifest at any path: `res://`, `user://` or absolute.
+func build_from_path(path: String) -> bool:
+	if _built:
+		return true
+	manifest_path = path
+	_built = true
+	_construct()
+	return not manifest.is_empty()
+
+
+func _construct() -> void:
 	if manifest_path.is_empty():
 		push_error("G2GBspMap: no manifest_path")
 		return

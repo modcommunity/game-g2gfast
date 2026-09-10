@@ -18,7 +18,7 @@ extends Node
 ## optional content and a clone that has never run the importer is not broken.
 
 ## Checks per map. See [constant EXPECTED_CHECKS].
-const CHECKS_PER_MAP := 20
+const CHECKS_PER_MAP := 21
 
 ## A script error inside a test aborts THAT TEST and not the run, so a suite that has
 ## quietly lost two checks still prints "0 failed" — which is what happened while this
@@ -179,6 +179,14 @@ func _test_zones() -> void:
 	# who falls off falls for ever, which is the bug dot-timer's effect_requested was.
 	_check(respawns > 0, "with the pit volumes carried across as RESPAWN zones",
 		"%d respawn zones" % respawns)
+
+	# Source sweeps its trigger tests; dot-timer samples a point per tick. A pit drawn
+	# as a 16-unit plane -- which is how every one of them is drawn, because in Source
+	# that is enough -- is stepped clean over by a player falling at genre speed, and
+	# they then fall for ever. 48 of surf_kitsune's 53 were that thin on import.
+	var thin := zones.thin_zones(G2GUnits.to_metres(3500.0), game.tick_rate)
+	_check(thin.is_empty(), "and no zone a 3500 u/s player passes through between ticks",
+		"%d thin" % thin.size())
 
 
 func _test_stands_on_it() -> void:

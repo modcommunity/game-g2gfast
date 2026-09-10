@@ -61,6 +61,18 @@ func _ready() -> void:
 	game = G2GGame.new()
 	game.name = "Game"
 	var config := G2GConfig.new()
+	# The family's layered configuration: exported defaults < JSON < environment < argv.
+	# It was missing here, so a client was the one thing in this repository that could
+	# not be configured at all -- `--g2g-initial-map surf_kitsune` reached the server
+	# and the suites and went nowhere on the client, which always played whatever the
+	# export happened to default to. The layers are read BEFORE the two lines below,
+	# because those two are not preferences: a client is not the authority whatever a
+	# config file says.
+	var layered := config.load_layered()
+	if not layered.ok:
+		DotLog.warn("g2g.client", "the configuration did not load cleanly",
+			{"why": layered.error.message})
+
 	# A client is never the authority. Its timer is a display; its records go nowhere.
 	config.authoritative = _offline
 	config.initial_map = config.initial_map if _offline else &""

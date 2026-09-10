@@ -10,8 +10,11 @@ Writes into <out>/<id>/:
     <id>_lightmap.png     the map's own baked lighting, packed into one atlas
     textures/*.png        every texture the .bsp carried in its pakfile
 
-and generates `maps/<id>.gd`, a [G2GMap] subclass that builds an [ArrayMesh] from
-those at load and returns the timer zones.
+That directory IS the map. There is no scene and no script per map: every imported map
+is the one `maps/imported_map.tscn` that ships inside the build, pointed at a different
+manifest. A generated `<id>.tscn` cannot work for a map that arrives after the export --
+`res://` is a read-only PCK in a shipped build -- so a map is data at a path, and the
+paths the game searches include ones outside `res://` for exactly that reason.
 
 [b]Why a mesh binary and not glTF.[/b] The baked lighting needs a second UV set,
 and the route through glTF into Godot's importer decides for you what a second UV
@@ -42,6 +45,22 @@ import vtf  # noqa: E402
 LUMP_LIGHTING, LUMP_PAKFILE, LUMP_PLANES = 8, 40, 1
 ATLAS_W = 1024
 LM_PAD = 1
+
+# The least a zone volume may measure on any axis, in genre units.
+#
+# [b]Source sweeps its trigger tests and dot-timer samples a point per tick.[/b] A
+# `trigger_teleport` in a surf map is the pit, and a mapper draws it as a 16-unit
+# plane because Source asks "did the player's path cross this". dot-timer's index asks
+# `contains(point)` once a tick, so at 3500 u/s and 128 Hz -- 27 units of travel per
+# tick -- a falling player steps straight over a 16-unit plane and keeps falling for
+# ever, which is precisely the bug dot-timer's RESPAWN zones exist to prevent.
+#
+# The plane is therefore inflated into a slab centred on it. Centred, and not extended
+# downward: downward is right for a pit and wrong for a boundary trigger above the
+# play space, and a slab centred on the original plane is the honest approximation of
+# the swept test Source was doing. 192 units is seven ticks of travel at the genre's
+# ceiling speed.
+MIN_ZONE_THICKNESS = 192.0
 
 # Where the six g2gfast roles come from. A material's name is the only description of
 # intent a compiled .bsp still carries -- the brush entity that knew "this is the start
@@ -288,7 +307,20 @@ def build_mesh(bsp, out_bin, lm_place, lm_w, lm_h):
 
 
 # -------------------------------------------------------------------- zones ---
-def classify_zones(bsp):
+def inflate(lo, hi, minimum):
+    """A box grown about its own centre until no axis is thinner than `minimum`."""
+    lo, hi = list(lo), list(hi)
+    grown = False
+    for i in range(3):
+        span = hi[i] - lo[i]
+        if span < minimum:
+            centre = (lo[i] + hi[i]) * 0.5
+            lo[i], hi[i] = centre - minimum * 0.5, centre + minimum * 0.5
+            grown = True
+    return lo, hi, grown
+
+
+def classify_zones(bsp, min_thickness=MIN_ZONE_THICKNESS):
     """Spawns, and the volumes a timer cares about.
 
     [b]START and END are not automatable and are not guessed here.[/b] A CS:S surf map
@@ -326,7 +358,9 @@ def classify_zones(bsp):
                     pass
             spawns.append({"origin": origin, "yaw": yaw})
         elif cls == "trigger_teleport" and box:
-            respawn.append({"min": box[0], "max": box[1]})
+            lo, hi, grown = inflate(box[0], box[1], min_thickness)
+            respawn.append({"min": lo, "max": hi, "inflated": grown,
+                            "original_min": box[0], "original_max": box[1]})
         elif cls == "trigger_push" and box:
             push.append({"min": box[0], "max": box[1]})
         elif cls in ("trigger_multiple", "trigger_once") and box:
@@ -355,50 +389,6 @@ def pick_spawn(spawns):
     return best
 
 
-# ------------------------------------------------------------- map scripts ---
-MAP_GD = """extends G2GBspMap
-
-## `{id}` -- imported from `{source}` by tools/bsp_import.py.
-##
-## Everything that makes this map is in `imported/{id}/`: the mesh binary, the
-## manifest, the textures the .bsp carried and the lighting its compiler baked.
-## [G2GBspMap] builds them. Regenerate rather than edit:
-##
-##     tools/bsp_import.py <the .bsp> maps/imported --id {id}
-
-
-func _init() -> void:
-	manifest_path = "res://maps/imported/{id}/{id}.json"
-"""
-
-MAP_TSCN = """[gd_scene load_steps=2 format=3]
-
-[ext_resource type="Script" path="res://maps/imported/{id}/{id}.gd" id="1_map"]
-
-[node name="Map" type="Node3D"]
-script = ExtResource("1_map")
-"""
-
-
-def write_map_scripts(map_dir, map_id, source):
-    """The four-line subclass and its scene, inside the map's own directory.
-
-    Generated rather than hand-kept because the only thing in them that varies is the
-    id, and this tree has been bitten four times by a second copy of something going
-    stale. Regenerating is always correct; editing is always a mistake.
-
-    They live beside the data rather than beside the hand-written maps so that ignoring
-    an imported map is one line and not a list of names -- the same bug, one level up.
-    """
-    gd = os.path.join(map_dir, map_id + ".gd")
-    tscn = os.path.join(map_dir, map_id + ".tscn")
-    with open(gd, "w") as fh:
-        fh.write(MAP_GD.format(id=map_id, source=source))
-    with open(tscn, "w") as fh:
-        fh.write(MAP_TSCN.format(id=map_id))
-    return gd, tscn
-
-
 # ------------------------------------------------------------------- driver ---
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -406,6 +396,10 @@ def main(argv=None):
     ap.add_argument("out_dir")
     ap.add_argument("--id", default=None, help="map id (default: the file stem)")
     ap.add_argument("--tier", type=int, default=3)
+    ap.add_argument("--min-zone-thickness", type=float, default=MIN_ZONE_THICKNESS,
+                    dest="min_zone_thickness",
+                    help="least a zone volume may measure on any axis, in genre units "
+                         "(default %d; see MIN_ZONE_THICKNESS)" % MIN_ZONE_THICKNESS)
     a = ap.parse_args(argv)
 
     map_id = (a.id or os.path.splitext(os.path.basename(a.bsp))[0]).lower()
@@ -426,7 +420,7 @@ def main(argv=None):
         s["texture"] = png
         s["translucent"] = translucent
 
-    spawns, respawn, push, other = classify_zones(bsp)
+    spawns, respawn, push, other = classify_zones(bsp, a.min_zone_thickness)
     lo, hi = bsp.model_bounds(0)
     manifest = {
         "id": map_id,
@@ -438,6 +432,7 @@ def main(argv=None):
         "surfaces": surfaces,
         "spawn": pick_spawn(spawns),
         "spawns": spawns,
+        "min_zone_thickness": a.min_zone_thickness,
         "respawn_volumes": respawn,
         "push_volumes": push,
         "trigger_volumes": other,
@@ -451,12 +446,13 @@ def main(argv=None):
     print("  %d surfaces, %d tris (%d%% textured from the pakfile)"
           % (len(surfaces), tris, textured * 100 // max(1, tris)))
     print("  lightmap %dx%d, %d lit faces" % (lm_w, lm_h, len(place)))
-    print("  %d spawns, %d respawn volumes, %d push, %d other triggers"
-          % (len(spawns), len(respawn), len(push), len(other)))
+    inflated = sum(1 for v in respawn if v.get("inflated"))
+    print("  %d spawns, %d respawn volumes (%d thickened to %g units), %d push, %d other"
+          % (len(spawns), len(respawn), inflated, a.min_zone_thickness, len(push), len(other)))
     print("  start spawn at %s units" % [round(v) for v in manifest["spawn"]["origin"]])
 
-    gd, tscn = write_map_scripts(d, map_id, os.path.basename(a.bsp))
-    print("  wrote %s and %s" % (os.path.basename(gd), os.path.basename(tscn)))
+    print("  drop that directory anywhere the game looks and it is a map:")
+    print("    res://maps/imported/, user://maps/, or g2g_maps_directory")
     return 0
 
 

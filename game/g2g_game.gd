@@ -30,6 +30,9 @@ const GHOST_ID := &"u900000001"
 const GHOST_SESSION := 900000001
 
 signal map_ready(map: DotMapDef)
+
+## The map catalogue was re-read from the disk. Carries `added`, `removed`, `total`.
+signal maps_rescanned(change: Dictionary)
 signal run_filed(player_id: StringName, run: DotTimerRun, rank: int, reason: String)
 
 ## The movement changed under everybody — a cvar, or a config reload.
@@ -373,59 +376,47 @@ func _build_maps() -> void:
 	maps.map_over.connect(_on_map_over)
 
 
+## Every map on disk. See [G2GMapCatalogue] — there is no list here on purpose.
 func _map_catalogue() -> DotMapCatalogue:
-	var catalogue := DotMapCatalogue.new()
-
-	for row in [
-		[&"bhop_g2g_intro", "bhop: introduction", DotMapDef.KIND_BHOP, 2],
-		[&"surf_g2g_intro", "surf: introduction", DotMapDef.KIND_SURF, 3],
-		[&"bhop_g2g_stages", "bhop: five stages", DotMapDef.KIND_BHOP, 4],
-	]:
-		var map := DotMapDef.new()
-		map.id = row[0]
-		map.display_name = row[1]
-		map.kind = row[2]
-		map.tier = row[3]
-		map.scene_path = "res://maps/%s.tscn" % String(row[0])
-		map.author = "g2gfast"
-		catalogue.add(map)
-
-	_add_imported_maps(catalogue)
-
-	return catalogue
+	return G2GMapCatalogue.discover(_map_roots())
 
 
-## Every map under `maps/imported/`, without naming one.
+## Extra places to look for imported maps, from the configuration.
+func _map_roots() -> PackedStringArray:
+	var out := PackedStringArray()
+	if config != null and not config.maps_directory.is_empty():
+		out.append(config.maps_directory)
+	return out
+
+
+## Pick up maps added to or removed from the disk since this server booted.
 ##
-## [b]Scanned rather than listed on purpose.[/b] The list above is a list because those
-## three maps are written by hand in this repository and cannot appear without somebody
-## editing it. An imported map arrives by running `tools/bsp_import.py`, and a second
-## place to remember to add it is exactly the shape that has gone stale four times in
-## this tree — setup.sh, tools/check.sh, package_check.sh and the bootstrap manifests.
-## The manifest the importer writes is the one thing that cannot be forgotten, because
-## the map does not load without it.
-func _add_imported_maps(catalogue: DotMapCatalogue) -> void:
-	var root := "res://maps/imported"
-	var dir := DirAccess.open(root)
-	if dir == null:
-		return
-	for id in dir.get_directories():
-		var manifest_path := "%s/%s/%s.json" % [root, id, id]
-		if not FileAccess.file_exists(manifest_path):
-			continue
-		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(manifest_path))
-		if typeof(parsed) != TYPE_DICTIONARY:
-			push_warning("[maps] %s has no usable manifest" % id)
-			continue
-		var info: Dictionary = parsed
-		var map := DotMapDef.new()
-		map.id = StringName(id)
-		map.display_name = "%s (imported)" % id
-		map.kind = DotMapDef.KIND_BHOP if id.begins_with("bhop") else DotMapDef.KIND_SURF
-		map.tier = int(info.get("tier", 3))
-		map.scene_path = "res://maps/imported/%s/%s.tscn" % [id, id]
-		map.author = str(info.get("source", "imported"))
-		catalogue.add(map)
+## [b]Why a server needs this at all:[/b] the point of an imported map is that an
+## operator drops one in, and a game that only reads the disk once makes them restart
+## to play it — which on a live server means kicking everybody to add a map.
+##
+## The map being played is deliberately NOT unloaded when it disappears from the disk.
+## Its scene is already resident, the players on it are mid-run, and taking the world
+## out from under them to enforce a directory listing is a worse outcome than letting
+## the current map finish and never being chosen again.
+func rescan_maps() -> Dictionary:
+	if maps == null or maps.catalogue == null:
+		return {"added": [], "removed": [], "total": 0}
+
+	var playing: StringName = maps.current.id if maps.current != null else &""
+	var change := G2GMapCatalogue.rescan(maps.catalogue, _map_roots())
+
+	if playing != &"" and not maps.catalogue.has(playing):
+		DotLog.warn(CHANNEL, "the map being played is no longer on disk",
+			{"map": String(playing)})
+
+	DotLog.info(CHANNEL, "map catalogue rescanned", {
+		"added": change["added"].size(),
+		"removed": change["removed"].size(),
+		"total": change["total"],
+	})
+	maps_rescanned.emit(change)
+	return change
 
 
 # --- Movement cvars --------------------------------------------------------
@@ -710,6 +701,16 @@ func _on_map_changing(_from: DotMapDef, _to: DotMapDef) -> void:
 
 func _on_map_changed(map: DotMapDef, loaded: Node) -> void:
 	var g2g_map := loaded as G2GMap
+
+	# An imported map is data, and this is where it learns which data. It must happen
+	# before `timer_zones()` below: the zones come out of the manifest, so asking an
+	# unbuilt map for them returns an empty set and the map plays with no start, no
+	# finish and no pit -- with nothing erroring, because an empty zone set is a
+	# legitimate thing for a map to have.
+	var bsp := loaded as G2GBspMap
+	if bsp != null:
+		bsp.build_from(map)
+
 	var zones: DotTimerZoneSet = g2g_map.timer_zones() if g2g_map != null else null
 
 	if zones == null and maps.zones_json != "":

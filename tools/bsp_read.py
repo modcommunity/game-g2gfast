@@ -29,6 +29,7 @@ does.
 
 import collections
 import json
+import lzma
 import os
 import re
 import struct
@@ -66,10 +67,16 @@ class Bsp:
         if ident != b"VBSP":
             raise ValueError("%s is not a VBSP file (magic %r)" % (path, ident))
         self.dir = [struct.unpack_from("<iii4s", self.d, 8 + i * 16)[:3] for i in range(64)]
+        self._cache = {}
 
     def _lump(self, i):
+        if i in self._cache:
+            return self._cache[i]
         off, ln, _ = self.dir[i]
-        return self.d[off:off + ln]
+        raw = self.d[off:off + ln]
+        out = decompress_lump(raw)
+        self._cache[i] = out
+        return out
 
     def _array(self, i, fmt):
         b, sz = self._lump(i), struct.calcsize(fmt)
@@ -159,6 +166,39 @@ class Bsp:
                 tris.append((grid[a], grid[a + size], grid[a + 1]))
                 tris.append((grid[a + 1], grid[a + size], grid[a + size + 1]))
         return tris
+
+
+def decompress_lump(raw):
+    """A lump's bytes, decompressed if the map was compressed.
+
+    [b]Half the surf maps in circulation are LZMA-compressed and nothing says so in
+    the header.[/b] `bspzip -repack -compress` -- which every map host runs, because a
+    112 MB .bsp is a 112 MB download for every player who joins -- rewrites each lump
+    as a `lzma_header_t` followed by a raw LZMA1 stream, and leaves the file's VBSP
+    version at 20. So a reader that does not check reads the compressed bytes as
+    structures and gets plausible garbage: three of the eight maps here parsed their
+    plane array happily and then died in the texture string table, which is simply the
+    first lump whose contents are checked against anything.
+
+    The header is `LZMA`, the uncompressed size, the compressed size, and the five
+    property bytes that would normally start a .lzma file -- so this is a raw LZMA1
+    stream with no end-of-stream marker, which is exactly what FORMAT_RAW plus an
+    explicit `max_length` is for. An `.lzma` container reassembled by hand would be
+    the other route and needs the same five bytes anyway.
+    """
+    if len(raw) < 17 or raw[:4] != b"LZMA":
+        return raw
+    actual, _packed = struct.unpack_from("<II", raw, 4)
+    props = raw[12]
+    dict_size = struct.unpack_from("<I", raw, 13)[0]
+    pb, r = divmod(props, 45)
+    lp, lc = divmod(r, 9)
+    filters = [{"id": lzma.FILTER_LZMA1, "dict_size": max(4096, dict_size),
+                "lc": lc, "lp": lp, "pb": pb}]
+    dec = lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=filters)
+    # No end marker: the stream stops when `actual` bytes have come out of it, and
+    # asking for more raises rather than returning what there was.
+    return dec.decompress(raw[17:], max_length=actual)
 
 
 def to_godot(p):

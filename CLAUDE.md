@@ -44,6 +44,7 @@ game/
   g2g_bsp_map.gd    base for an IMPORTED map: mesh, materials and zones from a
                     manifest. See Decision 11
   g2g_bsp_lightmapped.gdshader  albedo x the lighting the map's own compiler baked
+  g2g_map_catalogue.gd  finds every map by looking. There is no list of maps
   g2g_stats.gd      every per-player number, declared once. See Decision 12
   g2g_awards.gd     achievements as rules over those ids
   g2g_progress.gd   dot-stats and dot-achievements, joined to the runs
@@ -59,16 +60,18 @@ game/
 npcs/               two hunters and the body they share
 props/              three practice blocks, in the genre's 32/64/128 sizes
 maps/               bhop_g2g_intro, surf_g2g_intro, and their .zones.json
-  imported/<id>/    what tools/bsp_import.py wrote: <id>.bin, <id>.json, the
-                    lightmap atlas, the textures the .bsp carried, and the four-line
-                    <id>.gd and <id>.tscn. All derived; gitignored; never hand-edited
+  imported_map.tscn THE scene every imported map uses. In the build; the maps are not
+  imported/<id>/    what tools/bsp_import.py wrote: <id>.bin, <id>.json, the lightmap
+                    atlas and the textures. Data only -- no scene, no script.
+                    Derived; gitignored; never hand-edited
 avatars/            six stock parts and the tint shader
 scenes/
   g2g_server.tscn   what a dot-server loads. A G2GGame under a plain Node
 examples/           headless_run (93), headless_net (85), dedicated (52),
-                    headless_imported (20 per imported map)
+                    headless_imported (21 per imported map), headless_maps (23)
 tools/              export_zones.gd — run after changing a map
                     bsp_read.py, vtf.py, bsp_import.py — Source .bsp to a map
+                    import_maps.sh — import a whole directory of them, idempotently
                     bsp_preview.gd/.tscn — render an imported map and exit
 ```
 
@@ -416,8 +419,14 @@ godot --headless --path . res://examples/headless_run.tscn   # 110 checks
 godot --headless --path . res://examples/headless_net.tscn   # 90 checks
 godot --headless --path . res://examples/dedicated.tscn      # 121 checks
 godot --headless --path . res://examples/jitter_probe.tscn   # 4 configurations
-godot --headless --path . res://examples/headless_imported.tscn  # 20 per imported map
+godot --headless --path . res://examples/headless_imported.tscn  # 21 per imported map
+godot --headless --path . res://examples/headless_maps.tscn      # 23 checks
 ```
+
+`headless_maps` is the one that says there is no list of maps anywhere: it removes a
+map from the catalogue that is still on disk and checks a rescan puts it back, and adds
+one to the catalogue that is *not* on disk and checks a rescan takes it away. Counting
+three maps proves nothing — a hardcoded list of three counts three too.
 
 `headless_imported` skips cleanly when `maps/imported/` is empty, because an imported
 map is optional content and a fresh clone that has never run the importer is not
@@ -764,6 +773,81 @@ the shape `external-study/` already has: reading a map for its dimensions, its r
 angles and its stage layout is the point of having it. Shipping extracted geometry in a
 released game is a different act and needs the author's permission.
 
+### Maps are dropped in, not listed
+
+There is no list of maps in this repository. `G2GMapCatalogue` scans, and a map is
+whatever has a scene and a sidecar, or is just a manifest:
+
+```
+maps/<id>.tscn   + maps/<id>.zones.json    hand-written: a scene and a script
+<root>/<id>/<id>.json                      imported: data, and nothing else
+```
+
+**An imported map has no scene and no script, and that is what makes it droppable.**
+Every one of them is `maps/imported_map.tscn` — one scene, inside the build — pointed
+at a different manifest through `DotMapDef.meta`. The obvious alternative, a generated
+`<id>.gd` and `<id>.tscn` beside the data, was what this shipped first and it cannot
+work for a map that arrives *after* the export: `res://` is a read-only PCK in a built
+game, so a scene that is not in it does not exist. A script in a delivered dot-cloud
+pack could not resolve `extends G2GBspMap` either — this family measured that and wrote
+it down — so the same change fixes both.
+
+The roots searched are `res://maps/imported` (baked into an export), `user://maps`
+(where anything downloaded at runtime lands, and **the only way a shipped server can be
+given a new map**), and whatever `g2g_maps_directory` names. First root wins, so a map
+in the build is not silently replaced by one dropped in beside it.
+
+```bash
+cp somewhere/surf_whatever.bsp ../inspirations/g2gfast/
+tools/import_maps.sh            # imports what is new, skips what is current
+tools/import_maps.sh --prune    # and deletes imports whose .bsp is gone
+```
+
+and on a running server, `g2g_maps_reload` rescans without a restart.
+
+**The rescan mutates the catalogue in place rather than replacing it.**
+[DotMapRotation] holds the catalogue by reference and reads its pool live, so swapping
+the object leaves the rotation offering exactly the maps that are no longer there.
+
+**The map being played is deliberately not unloaded when it disappears from disk.** Its
+scene is resident, the players on it are mid-run, and taking the world out from under
+them to enforce a directory listing is worse than letting it finish and never be chosen
+again. `g2g_maps_reload` says so in its reply.
+
+This replaced **three** hardcoded copies of the same three map ids —
+`G2GGame._map_catalogue`, `tools/export_zones.gd`, and the ad-hoc lists in the export
+scripts. That is this tree's most repeated bug and it had reached this repository too.
+
+**Verified by dropping one in**: a map copied into `user://maps/`, never in the build,
+with no script, no scene and no `.import` files, loads and plays and renders
+identically to the same map under `res://`.
+
+### What making it dynamic found
+
+- **A client could not be configured at all.** `G2GClient` built a bare `G2GConfig` and
+  never called `load_layered()`, so the family's `defaults < JSON < env < argv` chain —
+  which this file's Decision 1 is about — ran on the server, in every suite, and nowhere
+  on the client. `--g2g-initial-map surf_kitsune` reached a dedicated server and went
+  nowhere offline, which always played whatever the export defaulted to. It is the
+  family's own convention missing from exactly one file, and no test could see it
+  because every suite sets `config.initial_map` directly, which is the path that works.
+
+- **Every imported pit volume was thin enough to fall through.** Source *sweeps* its
+  trigger tests; `DotTimerZoneIndex` asks `contains(point)` once a tick. A mapper draws
+  a `trigger_teleport` as a 16-unit plane because in Source that is enough — and at
+  3500 u/s and 128 Hz a player travels 27 units between samples, so a falling surfer
+  steps clean over the pit and falls for ever. **48 of surf_kitsune's 53 respawn volumes
+  and 7 of Surf_Mesa's 10** were that thin. The importer now inflates a thin volume into
+  a slab centred on the original plane — centred, because downward is right for a pit
+  and wrong for a boundary trigger above the play space, and a centred slab is the
+  honest approximation of the swept test Source was doing.
+
+  This is the same failure this file already records twice: *the thing dot-timer's
+  RESPAWN zones exist to prevent was the thing that did not happen*, and it announced
+  itself as one warning line during an ordinary run. `headless_imported` now asserts
+  `thin_zones()` is empty, which is the check `headless_run` has always made for the
+  hand-written maps and nobody had extended to the imported ones.
+
 ## The detector, turned on this game's own new code
 
 The family's rule is that **an exported setting whose name occurs exactly once in its
@@ -809,6 +893,34 @@ Two things the new checks found that were not on the list:
   reported a failure for a signal that had fired perfectly. This file's own family notes
   carry that warning, and the check was written wrong anyway.
 
+## The characters are Kenney's, scaled to the genre's hull
+
+`avatars/{body,head}_kenney_<a..r>.tscn` are 18 characters from Kenney's Blocky
+Characters (CC0), generated by `tools/build_avatar_parts.gd` out of `avatars/kenney/`.
+The two primitives that came first stay at the FRONT of `BODIES` and `HEADS`: `[0]` is
+the schema's default, so a deployment without the art directory still resolves a default
+part and an avatar document written before the art arrived still loads. A capsule is a
+worse character and a better fallback.
+
+**The scale is the whole job, and this game is the awkward one.** A Kenney character is
+2.70 m; this game's player is 72 genre units, which is **1.372 m** — so an imported
+character is very nearly TWICE the size of the thing it represents, standing with its
+head above the camera, with every property of every node correct. The generator measures
+the kit and derives the factor (0.508 here) rather than carrying a constant, because
+game-arena runs the same kit against a 1.8 m capsule and gets 0.667: one number, written
+down twice, would be this file's most repeated bug in a new place.
+
+`G2GRig` mounts the body at 42% of the hull and the stock capsule is centred there, which
+floats it about 13 cm — invisible on a capsule and a character standing in mid-air the
+moment the part has legs. The body is foot-aligned; the head stays centred. **The rig is
+not changed for this**, because arena mounts the same way and its parts are still
+primitives: the art fits the rig.
+
+`tools/avatar_preview.tscn` draws the parts inside a wireframe of the hull they have to
+fit. Every one of those three was found by looking at a frame — "is this the right size"
+is not a question an eyeball on a character alone can answer, and it is the same lesson
+as the 0 x 0 `Control`s.
+
 ## Things deliberately not here
 
 - **A second transport.** The bridge speaks through `DotClientLink`'s RPCs on one
@@ -833,6 +945,24 @@ Two things the new checks found that were not on the list:
   world.
 - **A texture set.** `G2GTextures` generates a prototype grid and looks for an
   installed one in `res://textures/prototype/{floor,ramp,start,end,platform,bonus}.png`.
-  Kenney's prototype kit is CC0 and is what those files are for; dropping them in
-  changes every map in the game with no code change, because `G2GGeometry.box` takes a
-  ROLE rather than a colour and the roles are the whole interface.
+  Dropping files in changes every map in the game with no code change, because
+  `G2GGeometry.box` takes a ROLE rather than a colour and the roles are the whole
+  interface.
+
+  **Kenney's prototype kit was tried here and is not it.** It was installed, rendered
+  and compared against the generated grid, and it is a downgrade — so the entry that
+  used to say it "is what those files are for" was optimistic and this is what was
+  measured instead. Two reasons, and both are about the pipeline rather than the art:
+
+  - **The tint is a MULTIPLY**, so the source has to be light. Kenney's *Dark* set is a
+    dark base with light lines, and a dark base multiplied by a role colour is very
+    nearly black.
+  - **The *Light* set is too low-contrast at this tiling.** The generated grid draws a
+    darker line every square and a lighter one every `SQUARES_PER_TILE`, which is what
+    makes a floor something you can judge distance and speed against at 3000 u/s. A
+    1024x1024 Kenney panel stretched over the same area reads as almost flat, and a
+    movement game whose floor has no readable scale is harder to play, not prettier.
+
+  What would work is a light, high-contrast set whose line weight survives the tiling —
+  the generated grid is the specification for that, not a placeholder to be replaced by
+  the first CC0 kit to hand.

@@ -101,6 +101,14 @@ extends DotConfig
 
 @export var initial_map: StringName = &"bhop_g2g_intro"
 
+## An extra directory to find imported maps in, outside the build.
+##
+## [b]This is how a shipped server is given a map.[/b] `res://` is a read-only PCK in
+## an exported build, so a map baked in at export time is the only one a server can
+## ever play unless it can look somewhere else. `user://maps` is always searched;
+## this names one more, wherever an operator keeps them.
+@export_dir var maps_directory: String = ""
+
 ## A map catalogue JSON file. Empty uses the maps this build ships.
 @export var catalogue_path: String = ""
 

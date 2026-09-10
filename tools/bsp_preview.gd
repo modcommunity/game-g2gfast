@@ -13,17 +13,23 @@ func _ready() -> void:
 	var out := args[1] if args.size() > 1 else "user://bsp_preview.png"
 	var shots := int(args[2]) if args.size() > 2 else 4
 
-	# Imported maps keep their scene inside their own data directory; a hand-written
-	# one sits in maps/. Try both, so this previews either.
-	var path := "res://maps/imported/%s/%s.tscn" % [id, id]
-	if not ResourceLoader.exists(path):
-		path = "res://maps/%s.tscn" % id
-	var packed: PackedScene = load(path)
+	# Through the catalogue, like everything else -- an imported map has no scene of
+	# its own any more, so resolving one by path only works for the hand-written ones.
+	var catalogue := G2GMapCatalogue.discover()
+	var def := catalogue.get_map(StringName(id))
+	if def == null:
+		push_error("no map '%s'. Known: %s" % [id, ", ".join(
+			catalogue.maps.map(func(m: DotMapDef) -> String: return String(m.id)))])
+		get_tree().quit(1)
+		return
+	var packed: PackedScene = load(def.scene_path)
 	if packed == null:
-		push_error("no map scene for %s (tried %s)" % [id, path])
+		push_error("no scene for %s at %s" % [id, def.scene_path])
 		get_tree().quit(1)
 		return
 	var map: Node3D = packed.instantiate()
+	if map is G2GBspMap:
+		(map as G2GBspMap).build_from(def)
 	# Set before add_child: _build() runs from _ready(), so an override applied
 	# afterwards is applied to materials that already exist.
 	if args.size() > 4 and map is G2GBspMap:
