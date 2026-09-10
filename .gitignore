@@ -57,3 +57,6 @@ Thumbs.db
 # list of map names to keep in step -- which is this tree's most repeated bug.
 /maps/imported/
 /tools/__pycache__/
+screenshots/
+/addons/dot_spectate
+/addons/dot_effects

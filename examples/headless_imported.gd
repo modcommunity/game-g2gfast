@@ -17,8 +17,8 @@ extends Node
 ## Skips rather than fails when nothing has been imported: `maps/imported/` is
 ## optional content and a clone that has never run the importer is not broken.
 
-## Checks per map. See [constant EXPECTED_CHECKS].
-const CHECKS_PER_MAP := 21
+## Checks every map gets. Tracks and stages add one each on top — see [member _expected].
+const CHECKS_PER_MAP := 25
 
 ## A script error inside a test aborts THAT TEST and not the run, so a suite that has
 ## quietly lost two checks still prints "0 failed" — which is what happened while this
@@ -58,7 +58,9 @@ func _run() -> void:
 		await _test_geometry()
 		await _test_lighting()
 		_test_zones()
+		_test_runnable()
 		await _test_stands_on_it()
+		await _test_stands_where_it_sends_you()
 		if game != null:
 			game.queue_free()
 			game = null
@@ -188,6 +190,98 @@ func _test_zones() -> void:
 	_check(thin.is_empty(), "and no zone a 3500 u/s player passes through between ticks",
 		"%d thin" % thin.size())
 
+	# The two zones without which a map is scenery. Every one of these maps had them
+	# in its entity lump or in maps/zones/ before it was offered as a level; a map
+	# that reaches here without them is one the importer stopped reading.
+	var tracks := zones.playable_tracks()
+	_check(tracks.has(DotTimerTrack.MAIN),
+		"the main track has both a start line and a finish",
+		"runnable tracks: %s" % str(tracks))
+
+	# A track a player cannot be put on is a track nobody plays. `spawn_for` falls
+	# back to `fallback_spawn_units` for a missing one, which is the main track's
+	# spawn -- so a bonus with no spawn of its own silently starts at the map's start,
+	# and looks like a bonus that does not work rather than like a missing zone.
+	var without := PackedStringArray()
+	for track in tracks:
+		if zones.first_of_kind(DotTimerZone.Kind.SPAWN, track) == null:
+			without.append(DotTimerTrack.name_of(track))
+	_check(without.is_empty(), "and every runnable track has somewhere to spawn",
+		", ".join(without))
+
+
+func _test_runnable() -> void:
+	print("runnable")
+	var zones := game.timers.zones
+	if zones == null:
+		_check(false, "a run can be started, split and finished")
+		_check(false, "and its stages come out in order")
+		return
+
+	# [b]Drive the timer over the map's own zones and see a time come out.[/b] Every
+	# other check here is about a zone existing; this is the only one about the zones
+	# adding up to a run. A start with no reachable finish, a stage numbered past the
+	# end, a finish inside the start -- all of them pass `problems()` and none of them
+	# produces a time.
+	var timer := DotTimer.new()
+	timer.bind(zones, game.tick_rate)
+	var finished: Array[DotTimerRun] = []
+	timer.run_finished.connect(func(run: DotTimerRun) -> void: finished.append(run))
+
+	var start := zones.first_of_kind(DotTimerZone.Kind.START, DotTimerTrack.MAIN)
+	var finish := zones.first_of_kind(DotTimerZone.Kind.END, DotTimerTrack.MAIN)
+	if start == null or finish == null:
+		_check(false, "a run can be started, split and finished", "no start or no end")
+		_check(false, "and its stages come out in order")
+		return
+
+	# [b]A tick outside every zone, between the start and everything after it.[/b] The
+	# run begins on the tick the player LEAVES the start line, and that happens after
+	# the zone handling for the same tick -- so a route that steps straight from the
+	# start into the first stage arrives while the run is still IDLE and the split is
+	# dropped. It is an artifact of stepping a timer by hand rather than walking a
+	# map, and it cost every staged map here exactly one split until the gap was put
+	# back in.
+	var bounds: Dictionary = (game.current_map_node() as G2GBspMap).manifest.get("bounds", {})
+	var away := G2GUnits.vector_to_metres(Vector3(
+		float((bounds.get("max", [0, 0, 0]) as Array)[0]),
+		float((bounds.get("max", [0, 0, 0]) as Array)[1]),
+		float((bounds.get("max", [0, 0, 0]) as Array)[2]))) + Vector3(0.0, 128.0, 0.0)
+
+	# From stage 2, because stage 1 IS the start line on every map that numbers its
+	# own stages -- and stepping back into the start zone mid-route makes the timer do
+	# what it should: treat leaving it again as a new attempt, wiping the splits.
+	var route: Array[Vector3] = [start.centre(), start.centre(), away]
+	for n in range(2, zones.stage_count(DotTimerTrack.MAIN) + 1):
+		var stage := zones.stage_zone(DotTimerTrack.MAIN, n)
+		if stage != null:
+			route.append(stage.centre())
+	route.append(finish.centre())
+
+	var sample := DotTimerSample.new()
+	for point in route:
+		sample.previous_position = sample.position
+		sample.position = point
+		sample.grounded = true
+		timer.tick(sample)
+
+	_check(finished.size() == 1, "a run can be started, split and finished",
+		"%d finishes" % finished.size())
+	if finished.is_empty():
+		_check(false, "and its stages come out in order")
+		return
+
+	# Stage 1 is the start line, and a run begins by LEAVING it -- so its split is the
+	# one that legitimately never arrives. Every stage after it must.
+	var wanted := maxi(0, zones.stage_count(DotTimerTrack.MAIN) - 1)
+
+	var got := 0
+	for n in range(2, zones.stage_count(DotTimerTrack.MAIN) + 1):
+		if finished[0].splits.has(n):
+			got += 1
+	_check(got == wanted, "and its stages come out in order",
+		"%d of %d splits" % [got, wanted])
+
 
 func _test_stands_on_it() -> void:
 	print("collision")
@@ -230,3 +324,41 @@ func _test_stands_on_it() -> void:
 	var min_y: float = float((bounds.get("min", [0, -16384, 0]) as Array)[1]) * G2GUnits.METRES_PER_UNIT
 	_check(bot.global_position.y > min_y, "and has not left the world",
 		"y=%.1f, world floor %.1f" % [bot.global_position.y, min_y])
+
+
+## Every place the map can put a player: each track's spawn, and each `!s<n>`.
+##
+## [b]A destination is the one field nothing else checks.[/b] `DotTimerManager`
+## resolves "go to stage 3" to a zone's [member DotTimerZone.destination] and hands it
+## to the host, which teleports; a destination that is in the sky, inside a wall, or
+## left at the origin succeeds at every step and drops the player out of the world.
+## Standing on it for a second is the whole test, and it is the same test as the one
+## above with somewhere else to stand.
+func _test_stands_where_it_sends_you() -> void:
+	print("destinations")
+	var node := game.current_map_node()
+	var zones := game.timers.zones
+	var spots: Array = []
+	if zones != null:
+		for track in zones.playable_tracks():
+			var spawn := zones.first_of_kind(DotTimerZone.Kind.SPAWN, track)
+			if spawn != null:
+				spots.append([DotTimerTrack.short_name_of(track) + " spawn", spawn.destination])
+			for n in range(1, zones.stage_count(track) + 1):
+				var stage := zones.stage_zone(track, n)
+				if stage != null:
+					spots.append(["stage %d" % n, stage.destination])
+	_expected += spots.size()
+
+	var bot: G2GPlayer = game.players.get(&"bot")
+	if bot == null:
+		bot = game.add_player(&"bot", "Bot", true)
+		bot.sampler = null
+	for spot: Array in spots:
+		var at: Vector3 = spot[1]
+		bot.teleport(at, 0.0)
+		for _i in range(90):
+			await get_tree().physics_frame
+		var drop := at.y - bot.global_position.y
+		_check(drop < 8.0, "%s is somewhere a player can stand" % spot[0],
+			"fell %.1f m from %s" % [drop, str(at / G2GUnits.METRES_PER_UNIT)])

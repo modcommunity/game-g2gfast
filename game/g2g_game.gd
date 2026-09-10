@@ -90,6 +90,14 @@ var hunters: G2GHunters = null
 ## Props an admin can place. Null unless `sv_props` built them.
 var props: G2GProps = null
 
+## Watching somebody run, which on a timer server is the point rather than a
+## consolation for being dead. Built in every configuration.
+var spectate: G2GSpectate = null
+
+## Status effects, with the one rule that makes them safe here: a movement effect is a
+## style, and a style you did not choose is a record you did not set. See [G2GEffects].
+var effects: G2GEffects = null
+
 ## Statistics and achievements. Null on a client, and on a server that keeps none.
 ##
 ## [b]Authority only.[/b] A mirroring client sees every finish replicated to it, and
@@ -340,6 +348,36 @@ func _build_layers() -> void:
 			hunters.queue_free()
 			hunters = null
 
+	# Built whatever else is on. A player watching a runner needs no combat, no hunters
+	# and no props, and refusing them the camera because the server is a plain timer
+	# server would be refusing it on every server this game was written for.
+	spectate = G2GSpectate.new()
+	spectate.name = "Spectate"
+	spectate.game = self
+	add_child(spectate)
+
+	var watching := spectate.setup()
+
+	if not watching.ok:
+		DotLog.warn(CHANNEL, "spectating is off", {"why": watching.error.message})
+		remove_child(spectate)
+		spectate.queue_free()
+		spectate = null
+
+	if config.deathmatch or config.hunters:
+		effects = G2GEffects.new()
+		effects.name = "Effects"
+		effects.game = self
+		add_child(effects)
+
+		var applied := effects.setup()
+
+		if not applied.ok:
+			DotLog.warn(CHANNEL, "effects are off", {"why": applied.error.message})
+			remove_child(effects)
+			effects.queue_free()
+			effects = null
+
 	if config.placeable_props:
 		props = G2GProps.new()
 		props.name = "Props"
@@ -556,6 +594,9 @@ func ghost() -> G2GPlayer:
 
 
 func remove_player(id: StringName) -> void:
+	if effects != null:
+		effects.on_player_removed(id)
+
 	if not players.has(id):
 		return
 
@@ -668,6 +709,15 @@ func _simulate_tick(step: float) -> void:
 
 	if props != null:
 		props.tick(step)
+
+	# Before the timers, and it has to be: an effect that changes how somebody moves
+	# has already changed it by the time the timer measures the tick, and one applied
+	# after would be a tick of movement the run was not told about.
+	if effects != null:
+		effects.tick(step)
+
+	if spectate != null:
+		spectate.tick(step)
 
 	_feed_timers()
 

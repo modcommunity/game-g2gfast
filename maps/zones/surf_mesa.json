@@ -1,0 +1,16 @@
+{
+ "id": "surf_mesa",
+ "display_name": "surf: mesa",
+ "tier": 2,
+ "notes": "One long descent, no labels, and no stages: the map is a single ride from a platform at the top of the mesa to a room at the bottom of it. The finish is that room -- a trigger opens a blast door, and the only thing through the door is a teleport back to spawn, which is what a map does when it has run out of map. Everything else that teleports here goes to Spawn and is the pit, including one volume 32000 units wide that is the whole play space's out-of-bounds. The island teleport is a secret and is left as a door rather than a fall.",
+ "doorways": {
+  "max_horizontal": 512
+ },
+ "zones": [
+  {"kind": "START", "track": 0, "around": {"point": "Spawn", "extents": [256, 400, 140]},
+   "note": "the platform at the top, grown far enough to hold the info_player_* cluster as well as the nine Spawn destinations"},
+  {"kind": "END", "track": 0,
+   "near": {"class": "trigger_multiple", "point": [0, 14336, -12232], "within": 256},
+   "note": "the blast-door room at the bottom of the descent; the trigger that opens the door is the last thing on the route"}
+ ]
+}

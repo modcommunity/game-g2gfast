@@ -1,0 +1,13 @@
+{
+ "id": "surf_summit",
+ "display_name": "surf: summit",
+ "tier": 4,
+ "notes": "Three bonuses labelled, a main route that is not. Every fail on the main route -- and there are thirty of them -- teleports to td_mapstart, so td_mapstart is the start line whatever the info_player_* entities say; the spawn is moved onto it for the same reason. The finish is the seamless portal at the far -X end of the ride, which lands the player in td_end_room: the map is longer than Source's 16384-unit world and the end room is folded back into the other corner of it. Its third bonus has a start zone, eight checkpoints and no finish anywhere in the map, so it is dropped rather than offered as a track nobody can complete.",
+ "zones": [
+  {"kind": "START", "track": 0, "around": {"point": "td_mapstart", "extents": [320, 320, 160]},
+   "note": "where all thirty of the map's fail teleports put a player"},
+  {"kind": "END", "track": 0, "teleport_to": "td_end_room",
+   "note": "the seamless portal into the end room. Its pair (-> td_end_facade) is the way back and is left as ordinary geometry"},
+  {"kind": "SPAWN", "track": 0, "destination": "td_mapstart", "destination_yaw": 0}
+ ]
+}

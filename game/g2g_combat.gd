@@ -543,6 +543,19 @@ static func entity_id_for(player_id: StringName) -> int:
 ## [b]Not `"u%d" % entity`.[/b] That would be a second spelling of the id format, and
 ## the two ends of one serialisation are exactly as capable of never meeting as the two
 ## ends of a wire — which this family has now paid for twice.
+## The combat entity id for a player, or 0 when they have no kit.
+##
+## The other direction from [method player_id_for], and it exists because two id spaces
+## meet here: this game keys players by [StringName] and dot-combat and dot-effects both
+## key by int. A caller that hashed the name instead would produce a number that is
+## stable, plausible and not the one the health, the hitboxes and the kill feed use.
+func entity_for(player_id: StringName) -> int:
+	var kit: Variant = _kit.get(player_id, null)
+	if kit == null:
+		return 0
+	return int((kit as Dictionary)["entity"])
+
+
 func player_id_for(entity_id: int) -> StringName:
 	for id in _kit.keys():
 		if int((_kit[id] as Dictionary)["entity"]) == entity_id:

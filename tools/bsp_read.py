@@ -201,6 +201,19 @@ def decompress_lump(raw):
     return dec.decompress(raw[17:], max_length=actual)
 
 
+def yaw_to_godot(yaw):
+    """A Source yaw as the yaw dot-fps-controller builds a forward vector from.
+
+    Source measures yaw anticlockwise about +Z from +X; [method DotFpsMotor.forward]
+    is [code](-sin y, 0, -cos y)[/code], and the axis swap has already turned Source's
+    +Y into Godot's -Z. Solving the two against each other gives exactly `yaw - 90`,
+    and getting it wrong is not visible in any number: the player stands in the right
+    place facing the wrong way, which on a map with an obvious route reads as the
+    spawn being fine and on a spiral reads as the map being unplayable.
+    """
+    return float(yaw) - 90.0
+
+
 def to_godot(p):
     """Source Z-up to Godot Y-up, in genre units. See the module docstring."""
     return (p[0], p[2], -p[1])

@@ -1,0 +1,158 @@
+{
+ "id": "surf_kitsune",
+ "display_name": "surf: kitsune",
+ "tier": 2,
+ "notes": "Nine sections named after colours, and not one label in the map: kitsune drives its progression with `OnTrigger !activator,AddOutput,targetname X` and a filter chain, which is a program rather than a description. What IS in the file is a teleport graph, and it is completely regular. Every trigger_teleport aims at one of the nine colour destinations. The ones the size of a room are the pit under that colour's section; the ones the size of a door are how you leave one section for the next -- and 512 units separates the two with nothing near the boundary. So the colour destinations are the stage starts, in the order the doors chain them, and the single teleport aimed back at `start` -- at the far end of the white section -- is the finish.",
+ "doorways": {
+  "max_horizontal": 512
+ },
+ "zones": [
+  {
+   "kind": "START",
+   "track": 0,
+   "box": [
+    [
+     -104,
+     -2016,
+     190
+    ],
+    [
+     104,
+     -560,
+     520
+    ]
+   ],
+   "note": "the start room, from the pit door at its back to the door into red at its front"
+  },
+  {
+   "kind": "SPAWN",
+   "track": 0,
+   "destination": "spawn",
+   "note": "the back of the start room, facing the door; where the start room's own pit returns you"
+  },
+  {
+   "kind": "END",
+   "track": 0,
+   "teleport_to": "start",
+   "note": "the one DOOR aimed at the start, at the end of white; a pit in the section before it is aimed there too and is 6144 units across",
+   "max_horizontal": 512
+  },
+  {
+   "kind": "STAGE",
+   "track": 0,
+   "number": 1,
+   "around": {
+    "point": "red",
+    "extents": [
+     256,
+     256,
+     160
+    ]
+   }
+  },
+  {
+   "kind": "STAGE",
+   "track": 0,
+   "number": 2,
+   "around": {
+    "point": "orange",
+    "extents": [
+     256,
+     256,
+     160
+    ]
+   }
+  },
+  {
+   "kind": "STAGE",
+   "track": 0,
+   "number": 3,
+   "around": {
+    "point": "YELLOW",
+    "extents": [
+     256,
+     256,
+     160
+    ]
+   }
+  },
+  {
+   "kind": "STAGE",
+   "track": 0,
+   "number": 4,
+   "around": {
+    "point": "green",
+    "extents": [
+     256,
+     256,
+     160
+    ]
+   }
+  },
+  {
+   "kind": "STAGE",
+   "track": 0,
+   "number": 5,
+   "around": {
+    "point": "teal",
+    "extents": [
+     256,
+     256,
+     160
+    ]
+   }
+  },
+  {
+   "kind": "STAGE",
+   "track": 0,
+   "number": 6,
+   "around": {
+    "point": "blue",
+    "extents": [
+     256,
+     256,
+     160
+    ]
+   }
+  },
+  {
+   "kind": "STAGE",
+   "track": 0,
+   "number": 7,
+   "around": {
+    "point": "purple",
+    "extents": [
+     256,
+     256,
+     160
+    ]
+   }
+  },
+  {
+   "kind": "STAGE",
+   "track": 0,
+   "number": 8,
+   "around": {
+    "point": "pink",
+    "extents": [
+     256,
+     256,
+     160
+    ]
+   }
+  },
+  {
+   "kind": "STAGE",
+   "track": 0,
+   "number": 9,
+   "around": {
+    "point": "WHITE",
+    "extents": [
+     256,
+     256,
+     160
+    ]
+   }
+  }
+ ]
+}

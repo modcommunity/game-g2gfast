@@ -35,6 +35,8 @@ func _run() -> void:
 	await _test_bonus_track()
 	await _test_ghost()
 	await _test_progression()
+	await _test_spectating()
+	await _test_effects_and_the_run()
 
 	print("")
 	print("%d passed, %d failed" % [_passed, _failed])
@@ -76,6 +78,173 @@ func _drive(id: StringName, command: DotFpsCommand, ticks: int) -> void:
 	for _i in range(ticks):
 		player.controller.apply_command(command.duplicate_command())
 		await get_tree().physics_frame
+
+
+# --- Spectating ------------------------------------------------------------
+
+## Watching somebody run, which on a timer server is the point rather than a
+## consolation for being dead.
+func _test_spectating() -> void:
+	print("spectating")
+
+	if game.spectate == null:
+		_check(false, "the spectate layer is built")
+		return
+
+	_check(true, "the spectate layer is built")
+
+	# A plain timer server has no sides and nobody dead, and both of those would stop
+	# every other game's spectator policy dead: `force_camera 1` would restrict the
+	# camera to a team that is everybody, and "dead players only" would make every
+	# runner unwatchable, which is the one thing this layer exists for.
+	_check(
+		game.spectate.manager.rules.force_camera == 0,
+		"anybody may watch anybody on a timer server",
+		str(game.spectate.manager.rules.force_camera)
+	)
+	_check(
+		game.spectate.manager.rules.allow_while_alive,
+		"and a living player may watch, because standing in the start zone is not death"
+	)
+
+	var watcher := game.add_player(&"watcher", "Watcher", false)
+	_check(watcher != null, "a second player joins")
+	await get_tree().physics_frame
+
+	var res := game.spectate.watch(&"watcher", &"bot")
+	_check(res.ok, "and can watch the runner", str(res.error))
+	_check(
+		game.spectate.target_of(&"watcher") == &"bot",
+		"the target is who was asked for",
+		String(game.spectate.target_of(&"watcher"))
+	)
+
+	game.tick_once(game.current_tick() + 1)
+
+	var seen := game.spectate.camera_for(&"watcher")
+	var runner: G2GPlayer = game.players[&"bot"]
+	_check(
+		seen.origin.distance_to(runner.eye_position()) < 0.01,
+		"and the camera is at the runner's eyes rather than at their feet or the origin",
+		"%v against %v" % [seen.origin, runner.eye_position()]
+	)
+
+	# `!spec` with no name, which is what a spectator actually types.
+	var best := game.spectate.watch_best(&"watcher")
+	_check(best.ok, "watching whoever is furthest into a run picks somebody", str(best.error))
+
+	game.spectate.stop(&"watcher")
+	_check(
+		not game.spectate.is_spectating(&"watcher"),
+		"and it can be turned off"
+	)
+
+	game.remove_player(&"watcher")
+	await get_tree().physics_frame
+
+
+# --- Effects, and the rule that makes them safe here ------------------------
+
+## A movement effect is a style, and a style you did not choose is a record you did not
+## set. This is the section that pins that.
+func _test_effects_and_the_run() -> void:
+	print("effects")
+
+	# The stock configuration has neither deathmatch nor hunters, so there is no
+	# effects layer — which is correct and is itself worth asserting: a timer server
+	# that built one would be a timer server carrying a system nothing could reach.
+	_check(
+		game.effects == null,
+		"a plain timer server has no effects layer at all"
+	)
+
+	var config := G2GConfig.new()
+	config.records_directory = ""
+	config.map_seconds = 0.0
+	config.initial_map = &"bhop_g2g_intro"
+	config.hunters = true
+
+	var hunted := G2GGame.new()
+	hunted.config = config
+	add_child(hunted)
+
+	for _i in range(60):
+		await get_tree().process_frame
+		if hunted.maps != null and hunted.maps.current != null:
+			break
+
+	_check(hunted.effects != null, "a hunted server builds one")
+
+	if hunted.effects == null:
+		hunted.queue_free()
+		remove_child(hunted)
+		return
+
+	var runner := hunted.add_player(&"run", "Runner", true)
+	runner.sampler = null
+	await get_tree().physics_frame
+
+	# Not in a run yet: the slow is allowed.
+	var idle := hunted.effects.apply(G2GEffects.MAULED, &"run")
+	_check(idle.ok, "a slow lands on somebody who is not running", str(idle.error))
+	hunted.effects.remove(G2GEffects.MAULED, &"run")
+
+	# And the movement actually changes, which is the half that has to work for the
+	# refusal below to be worth anything.
+	var base := runner.base_tunables.max_speed
+	var _again := hunted.effects.apply(G2GEffects.MAULED, &"run")
+	hunted.tick_once(hunted.current_tick() + 1)
+	_check(
+		runner.controller.tunables.max_speed < base,
+		"and it actually slows them",
+		"%.2f from %.2f" % [runner.controller.tunables.max_speed, base]
+	)
+
+	for _i in range(30):
+		hunted.tick_once(hunted.current_tick() + 1)
+	_check(
+		runner.controller.tunables.max_speed > 0.1,
+		"without compounding to a standstill over thirty ticks",
+		"%.4f" % runner.controller.tunables.max_speed
+	)
+	hunted.effects.remove(G2GEffects.MAULED, &"run")
+
+	# Now in a run. The whole point of the layer.
+	runner.timer.run.status = DotTimerRun.Status.RUNNING
+	var refused := hunted.effects.apply(G2GEffects.MAULED, &"run")
+	_check(
+		not refused.ok,
+		"and is REFUSED on a ranked run: a style you did not choose is a record you did "
+		+ "not set"
+	)
+	_check(
+		refused.code() == DotError.CODE_FORBIDDEN,
+		"with a forbidden code rather than a silent no-op",
+		refused.code()
+	)
+
+	# A bleed is not a movement effect and lands regardless, which is the other half of
+	# the split: being chased still has to hurt.
+	var bled := hunted.effects.apply(G2GEffects.BLEEDING, &"run")
+	_check(
+		bled.ok or bled.code() != DotError.CODE_FORBIDDEN,
+		"while a bleed lands during a run, because it cannot change a time",
+		str(bled.error)
+	)
+
+	# And the server that wants hunted runs to count anyway pays for it in the field
+	# dot-timer has had since it was written and nothing had ever set.
+	hunted.effects.allow_movement_during_runs = true
+	var tainting := hunted.effects.apply(G2GEffects.MAULED, &"run")
+	_check(tainting.ok, "a server may allow it", str(tainting.error))
+	_check(
+		runner.timer.run.tainted,
+		"and the run is tainted, which is what keeps it off a board beside a clean one"
+	)
+
+	hunted.queue_free()
+	remove_child(hunted)
+	await get_tree().process_frame
 
 
 # --- Units and view --------------------------------------------------------

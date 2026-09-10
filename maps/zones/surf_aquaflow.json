@@ -1,0 +1,6 @@
+{
+ "id": "surf_aquaflow",
+ "display_name": "surf: aquaflow",
+ "tier": 2,
+ "notes": "Labelled throughout: zone_start, zone_end, checkpoint_1 and checkpoint_2. Nothing to add but the tier, which is an operator's call and is here to be edited rather than because the map said so."
+}

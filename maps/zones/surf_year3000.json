@@ -1,0 +1,21 @@
+{
+ "id": "surf_year3000",
+ "display_name": "surf: year3000",
+ "tier": 3,
+ "notes": "A 2007 map, older than any convention for labelling a zone, and built for two teams: everything on the route exists twice, once per side, mirrored about x. Its own names are the only ordering there is -- stage02_t/stage02_ct and stage03_t/stage03_ct -- so stage 1 is the start room and the stage zones cover both sides of the pair. It ends in a prison: finishing the last section teleports to jail_pro and failing it teleports to jail_noob, which is as clear a statement of which one is the finish as a map from 2007 is going to make.",
+ "doorways": {
+  "max_horizontal": 512
+ },
+ "zones": [
+  {"kind": "START", "track": 0, "box": [[-330, -3030, 9020], [530, -2430, 9210]],
+   "note": "the start room, both team platforms"},
+  {"kind": "SPAWN", "track": 0, "destination": [45, -2600, 9110], "destination_yaw": 270,
+   "note": "between the two platforms, facing -Y down the map; the team spawns face along +X, which is sideways"},
+  {"kind": "END", "track": 0, "teleport_to": "jail_pro",
+   "note": "jail_pro is where finishing puts you; jail_noob, beside it, is where failing does"},
+  {"kind": "STAGE", "track": 0, "number": 2,
+   "around": {"point": ["stage02_t", "stage02_ct"], "extents": [200, 200, 130]}},
+  {"kind": "STAGE", "track": 0, "number": 3,
+   "around": {"point": ["stage03_t", "stage03_ct"], "extents": [200, 200, 130]}}
+ ]
+}

@@ -403,6 +403,20 @@ func hunter_attack(npc: DotNpcInstance, victim: StringName, amount: float) -> vo
 	damage.weapon_id = npc.def.id if npc.def != null else &"hunter"
 	game.combat.manager.apply_damage(damage)
 
+	# And the part that makes being chased cost something other than health.
+	#
+	# [b]Refused on a ranked run unless the server has said otherwise[/b], and tainting
+	# it when it is allowed — see [G2GEffects]. A hunter that could quietly halve a
+	# runner's speed would be handing them a style they did not choose, and a time set
+	# under one is not comparable with anything.
+	if game.effects != null:
+		var slowed := game.effects.apply(G2GEffects.MAULED, victim, &"")
+
+		if not slowed.ok:
+			DotLog.debug(CHANNEL, "the swipe did not slow", {
+				"player": String(victim), "why": slowed.error.message
+			})
+
 
 func _on_died(npc: DotNpcInstance, by: StringName) -> void:
 	var killer := StringName("")

@@ -26,6 +26,26 @@ extends G2GMap
 
 const VERTEX_FLOATS := 10          # position 3, normal 3, uv 2, uv2 2
 
+## Zone kinds by the name the manifest writes, which is [enum DotTimerZone.Kind]'s.
+##
+## [b]Names on the wire, not numbers.[/b] A manifest is read by a build that may be
+## older or newer than the one that wrote it -- `user://maps` outlives an update --
+## and a number would silently become a different kind the day anything is inserted
+## into that enum. dot-timer keeps the numbering compatible with the community
+## timers' for exactly this reason, and a name costs nothing to be safe as well.
+const KINDS := {
+	"START": DotTimerZone.Kind.START, "END": DotTimerZone.Kind.END,
+	"RESPAWN": DotTimerZone.Kind.RESPAWN, "STOP": DotTimerZone.Kind.STOP,
+	"SLAY": DotTimerZone.Kind.SLAY, "FREESTYLE": DotTimerZone.Kind.FREESTYLE,
+	"SPEED_LIMIT": DotTimerZone.Kind.SPEED_LIMIT, "TELEPORT": DotTimerZone.Kind.TELEPORT,
+	"SPAWN": DotTimerZone.Kind.SPAWN, "EASY_BHOP": DotTimerZone.Kind.EASY_BHOP,
+	"SLIDE": DotTimerZone.Kind.SLIDE, "AIR_ACCELERATE": DotTimerZone.Kind.AIR_ACCELERATE,
+	"STAGE": DotTimerZone.Kind.STAGE, "GRAVITY": DotTimerZone.Kind.GRAVITY,
+	"PUSH": DotTimerZone.Kind.PUSH, "NO_JUMP": DotTimerZone.Kind.NO_JUMP,
+	"AUTO_HOP": DotTimerZone.Kind.AUTO_HOP, "CHECKPOINT": DotTimerZone.Kind.CHECKPOINT,
+	"CUSTOM": DotTimerZone.Kind.CUSTOM,
+}
+
 ## The manifest this map builds from. Set by [method build_from]; only an editor
 ## placement of this scene ever sets it by hand.
 @export_file("*.json") var manifest_path: String = ""
@@ -96,7 +116,10 @@ func _construct() -> void:
 	_bounds_max = _vec(bounds.get("max", [0, 0, 0]))
 
 	var spawn: Dictionary = manifest.get("spawn", {})
-	fallback_spawn_units = _vec(spawn.get("origin", [0, 64, 0])) + Vector3(0.0, 8.0, 0.0)
+	# No lift added here: the manifest's destinations already carry one, applied at
+	# the same boundary the axis swap is. Two lifts is a player dropped from waist
+	# height onto every spawn, which reads as the map being badly made.
+	fallback_spawn_units = _vec(spawn.get("origin", [0, 64, 0]))
 
 	var lm_info: Dictionary = manifest.get("lightmap", {})
 	var lightmap: Texture2D = _load_texture(dir.path_join(str(lm_info.get("file", ""))))
@@ -235,22 +258,75 @@ static func _vec(a: Variant) -> Vector3:
 	return Vector3(float(arr[0]), float(arr[1]), float(arr[2]))
 
 
-## Zones: the spawn, and every volume that catches a player who fell off the ride.
+## Zones: everything the manifest worked out about this map.
 ##
-## START and END are deliberately absent -- see `classify_zones` in the importer.
-## A `trigger_teleport` in a surf map is the pit, and dot-timer's RESPAWN is what it is.
+## [b]The importer decides what a zone is; this only reads.[/b] Which volume is the
+## finish line is a judgement about a map somebody played, and it is made once --
+## in `tools/bsp_import.py` against the entity lump, and in `maps/zones/<id>.json`
+## where a map does not label itself. Making it again here would be a second copy of
+## the answer, and this family has counted what two copies of one list cost it.
+##
+## A manifest with no `zones` is one written before there were any: it gets the spawn
+## and the pit, which is what it carried and all it can support. `user://maps` is full
+## of those the moment anybody downloads a map, and refusing them would take away maps
+## that work.
 func timer_zones() -> DotTimerZoneSet:
 	var zones := DotTimerZoneSet.new()
 	zones.map_id = StringName(str(manifest.get("id", "imported")))
 	zones.meta["tier"] = tier
 	zones.meta["source"] = manifest.get("source", "")
 	zones.meta["imported"] = true
+	zones.meta["track_names"] = manifest.get("track_names", {})
 
+	var listed: Array = manifest.get("zones", [])
+	if listed.is_empty():
+		return _legacy_zones(zones)
+
+	for entry: Variant in listed:
+		var zone := _zone_from(entry as Dictionary)
+		if zone != null:
+			zones.add(zone)
+	return zones
+
+
+## One zone from its manifest entry, or null if the kind is not one we know.
+##
+## An unknown kind is skipped rather than defaulted. [enum DotTimerZone.Kind] starts
+## at START, so a `kind` this build has never heard of would otherwise become a second
+## start line -- and a track with two of those is a track [DotTimerZoneSet] refuses
+## whole, over a zone nobody asked for.
+func _zone_from(entry: Dictionary) -> DotTimerZone:
+	var name := str(entry.get("kind", ""))
+	if not KINDS.has(name):
+		DotLog.warn("g2g.maps", "an imported map has a zone kind this build does not know",
+			{"map": manifest.get("id", "?"), "kind": name})
+		return null
+
+	var kind: DotTimerZone.Kind = KINDS[name]
+	var track := int(entry.get("track", DotTimerTrack.MAIN))
+	var zone: DotTimerZone
+
+	if entry.has("min") and entry.has("max"):
+		zone = zone_box(kind, track, _vec(entry["min"]), _vec(entry["max"]))
+	else:
+		zone = DotTimerZone.make(kind, track)
+
+	zone.number = float(entry.get("number", 0.0))
+	if entry.has("destination"):
+		zone.destination = G2GUnits.vector_to_metres(_vec(entry["destination"]))
+		zone.destination_yaw = float(entry.get("destination_yaw", 0.0))
+	zone.comment = str(entry.get("comment", ""))
+	return zone
+
+
+## The zones a manifest written before `zones` existed can still supply.
+func _legacy_zones(zones: DotTimerZoneSet) -> DotTimerZoneSet:
 	var spawn: Dictionary = manifest.get("spawn", {})
-	var at := _vec(spawn.get("origin", [0, 64, 0])) + Vector3(0.0, 8.0, 0.0)
-	zones.add(zone_spawn(0, at, float(spawn.get("yaw", 0.0))))
+	zones.add(zone_spawn(DotTimerTrack.MAIN, _vec(spawn.get("origin", [0, 64, 0])),
+		float(spawn.get("yaw", 0.0))))
 
 	for v: Variant in manifest.get("respawn_volumes", []):
 		var vol: Dictionary = v
-		zones.add(zone_box(DotTimerZone.Kind.RESPAWN, 0, _vec(vol.get("min")), _vec(vol.get("max"))))
+		zones.add(zone_box(DotTimerZone.Kind.RESPAWN, DotTimerTrack.MAIN,
+			_vec(vol.get("min")), _vec(vol.get("max"))))
 	return zones

@@ -480,6 +480,47 @@ func _on_chat_command(peer: int, command: String, args: PackedStringArray) -> vo
 				services.notice(peer, "Rocked the vote." if res.ok else res.error.message)
 
 			services.claim_command()
+		"spec", "spectate":
+			if game.spectate == null:
+				services.notice(peer, "Spectating is not available here.")
+			elif args.is_empty():
+				var best := game.spectate.watch_best(voter)
+				services.notice(
+					peer,
+					("Watching %s. !spec off to stop."
+						% game.spectate.target_of(voter)) if best.ok
+					else best.error.message
+				)
+			elif args[0] == "off" or args[0] == "stop":
+				game.spectate.stop(voter)
+				services.notice(peer, "Back to your own view.")
+			else:
+				# By name, and then by id. A player types what is on the scoreboard and
+				# an id is what the game keys by; asking for the id alone is asking a
+				# player to know something they cannot see.
+				var wanted := _player_named(args[0])
+				var res := game.spectate.watch(
+					voter, wanted if wanted != &"" else StringName(args[0])
+				)
+				services.notice(
+					peer,
+					("Watching %s." % game.spectate.target_of(voter)) if res.ok
+					else res.error.message
+				)
+
+			services.claim_command()
+		"specnext", "next":
+			if game.spectate == null:
+				services.notice(peer, "Spectating is not available here.")
+			else:
+				var res := game.spectate.next_target(voter)
+				services.notice(
+					peer,
+					("Watching %s." % game.spectate.target_of(voter)) if res.ok
+					else res.error.message
+				)
+
+			services.claim_command()
 		"vote":
 			if args.is_empty():
 				services.notice(peer, "Usage: !vote <map>")
@@ -494,6 +535,26 @@ func _on_chat_command(peer: int, command: String, args: PackedStringArray) -> vo
 			# Left for dot-server's own chat commands, which this game registers with
 			# `.with_chat()` — `!r`, `!wr`, `!top`, `!style`, `!track`.
 			pass
+
+
+## A player id by display name, or "".
+##
+## Case-insensitive and by prefix, which is what every server in this genre does —
+## `!spec ad` finds Ada. The first match wins and the order is the roster's, which is
+## stable; the alternative is refusing an ambiguous prefix, and a player who typed two
+## letters and got "be more specific" types three letters and gives up.
+func _player_named(text: String) -> StringName:
+	var wanted := text.strip_edges().to_lower()
+
+	if wanted == "":
+		return &""
+
+	for session in server.sessions():
+		var name := session.display_name.to_lower()
+		if name == wanted or name.begins_with(wanted):
+			return _player_id(session)
+
+	return &""
 
 
 func _module_unload() -> void:

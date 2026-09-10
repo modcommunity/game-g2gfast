@@ -1,0 +1,6 @@
+{
+ "id": "surf_interference",
+ "display_name": "surf: interference",
+ "tier": 3,
+ "notes": "map_start_zone and map_end_zone are the map's own. Its three checkpoints are named rather than numbered -- center, left and right -- because they are three routes through one section and a player takes exactly one, so they are reported and not counted as splits."
+}

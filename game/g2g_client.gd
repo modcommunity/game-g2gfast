@@ -317,6 +317,38 @@ func _process(delta: float) -> void:
 	for id in (game.players if game != null else {}):
 		(game.players[id] as G2GPlayer).present(delta)
 
+	_drive_spectator_camera()
+
+
+## Where a spectator looks.
+##
+## Once a FRAME, not once a tick. A camera moved on the tick timeline steps at the tick
+## rate however smoothly the runner it is following is interpolated, and this game
+## measured that at a 47% change in apparent speed eight times a second — the whole
+## reason `jitter_probe.tscn` exists.
+##
+## The rig's own camera is left where it is and only its transform is overwritten, so
+## turning spectating off puts the player straight back in their own view with no
+## rebuild.
+func _drive_spectator_camera() -> void:
+	if game == null or game.spectate == null or player == null:
+		return
+
+	var camera: Camera3D = player.camera.active() if player.camera != null else null
+
+	if camera == null:
+		return
+
+	if not game.spectate.is_spectating(player.player_id):
+		return
+
+	var where := game.spectate.camera_for(player.player_id)
+
+	if where == Transform3D.IDENTITY:
+		return
+
+	camera.global_transform = where
+
 
 ## Set by a headless suite to answer [method mouse_drives_view] without a display
 ## server. Left null in play, where the real mouse mode is the only honest answer.

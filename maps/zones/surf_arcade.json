@@ -1,0 +1,22 @@
+{
+ "id": "surf_arcade",
+ "display_name": "surf: arcade",
+ "tier": 3,
+ "notes": "Six stages and a bonus, and the map labels exactly one of them (b_startzone). What it does label is where a FAILED stage puts you back: s1_reset .. s6_reset. That is the start of each stage by definition, which is what the stage zones are built around here. The finish is the teleport into the end room, the one the '...Thank you...' game_text sits in. The player spawns in a hub off the route, so the main spawn is moved to the start of stage 1 -- a player left in the hub can walk about for ever without crossing a start line.",
+ "zones": [
+  {"kind": "START", "track": 0, "around": {"point": "s1_reset", "extents": [256, 256, 128]},
+   "note": "the stage 1 pad, which is where a fail in stage 1 returns you"},
+  {"kind": "END", "track": 0, "teleport_to": "endroomdest",
+   "note": "into the end room; a trigger_multiple in there displays '...Thank you...'"},
+  {"kind": "SPAWN", "track": 0, "destination": "s1_reset", "destination_yaw": 0,
+   "note": "not the hub the info_player_* entities are in"},
+  {"kind": "STAGE", "track": 0, "number": 1, "around": {"point": "s1_reset", "extents": [256, 256, 128]}},
+  {"kind": "STAGE", "track": 0, "number": 2, "around": {"point": "s2_reset", "extents": [256, 256, 128]}},
+  {"kind": "STAGE", "track": 0, "number": 3, "around": {"point": "s3_reset", "extents": [256, 256, 128]}},
+  {"kind": "STAGE", "track": 0, "number": 4, "around": {"point": "s4_reset", "extents": [256, 256, 128]}},
+  {"kind": "STAGE", "track": 0, "number": 5, "around": {"point": "s5_reset", "extents": [256, 256, 128]}},
+  {"kind": "STAGE", "track": 0, "number": 6, "around": {"point": "s6_reset", "extents": [256, 256, 128]}},
+  {"kind": "END", "track": 1, "teleport_to": "bonustohubdest",
+   "note": "the bonus ends by sending you back to the hub; b_startzone is where it began"}
+ ]
+}

@@ -921,6 +921,65 @@ fit. Every one of those three was found by looking at a frame — "is this the r
 is not a question an eyeball on a character alone can answer, and it is the same lesson
 as the 0 x 0 `Control`s.
 
+## Spectating, and effects with a rule
+
+### `!spec`, which this game shipped without
+
+**On a timer server, spectating is the point rather than a consolation for being dead.**
+A record is set by one person, once, and everybody else on the server wants to watch it
+being set — `!spec ada` is a command bhop and surf servers have had for fifteen years.
+
+Two settings follow from that and both are the opposite of an arena's:
+
+- **`force_camera` is 0.** There are no sides on a timer server, so restricting the
+  camera to "your own team" restricts it to everybody and means nothing. It tightens to
+  1 the moment `sv_deathmatch` is on, where a living player watching a living one is a
+  free wallhack.
+- **`allow_while_alive` is on.** Somebody standing in the start zone deciding whether to
+  run is not dead, and refusing them the camera is a rule from a game this is not.
+
+`!spec` with no argument watches whoever is **furthest into a run** — furthest rather
+than fastest, because "who is nearly finished" is the question a spectator is asking and
+somebody two seconds into a personal best is not the answer. The camera is driven once a
+**frame**, for the reason `jitter_probe.tscn` exists.
+
+### A movement effect is a style, and a style you did not choose is a record you did not set
+
+This is the whole design of `G2GEffects` and the reason it is not four lines.
+
+Everything in this game exists to make a run comparable with one somebody else set, on
+another server, at another tick rate: sub-tick zone crossings, a rate taken from
+`sv_tickrate` rather than an export, styles paired between dot-fps-controller and
+dot-timer by id. **An effect that quietly multiplies `max_speed` by 0.65 undoes all of
+it**, and the player has no way of knowing it happened.
+
+So effects here are split, and the split is enforced rather than documented:
+
+| | |
+| --- | --- |
+| **Combat effects** — a bleed, a burn | Anybody, any time. They cannot change a time. |
+| **Movement effects** — a maul, a haste | **Refused** while a ranked run is live. |
+
+`G2GEffects.is_movement()` asks the *definition* whether it changes `move_speed_scale` or
+`jump_scale`, rather than consulting a list of ids — so an effect added later is
+classified by what it does rather than by somebody remembering to name it.
+
+A server that wants hunted runs to count anyway sets `allow_movement_during_runs`, and
+every such run is **tainted**. `DotTimerRun.tainted` has existed since dot-timer was
+written and this is its first caller; it is what keeps a hunted run off a board beside a
+clean one, which is the honest version of allowing it.
+
+That is also what makes the hunters interesting rather than annoying: being chased has to
+cost you something, and the thing it costs you is the record.
+
+### Two id spaces meet at `entity_for`
+
+This game keys players by `StringName`; dot-combat and dot-effects both key by `int`.
+`G2GCombat.entity_for` is the direction that was missing — `player_id_for` had existed
+since the class was written and nothing went the other way. A caller that hashed the name
+instead would get a number that is stable, plausible, and **not** the one the health, the
+hitboxes and the kill feed use.
+
 ## Things deliberately not here
 
 - **A second transport.** The bridge speaks through `DotClientLink`'s RPCs on one
