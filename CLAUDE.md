@@ -72,7 +72,7 @@ textures/prototype/ the installed prototype set: one PNG per G2GTextures.Role, C
                     and what the IMPORTED maps draw in. See its README
 scenes/
   g2g_server.tscn   what a dot-server loads. A G2GGame under a plain Node
-examples/           headless_run (129), headless_net (90), dedicated (121),
+examples/           headless_run (135), headless_net (90), dedicated (121),
                     headless_imported (25 per map, plus one per track and stage),
                     headless_maps (24), jitter_probe (4 configurations)
 tools/              export_zones.gd — run after changing a map
@@ -434,7 +434,7 @@ work either way; where it is drawn is the half a game is supposed to decide.
 ```bash
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_run.tscn   # 130 checks
+godot --headless --path . res://examples/headless_run.tscn   # 135 checks
 godot --headless --path . res://examples/headless_presentation.tscn  # 38 checks
 godot --headless --path . res://examples/headless_net.tscn   # 90 checks
 godot --headless --path . res://examples/dedicated.tscn      # 121 checks

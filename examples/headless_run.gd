@@ -7,7 +7,10 @@ extends Node
 ## godot --headless --path . res://examples/headless_run.tscn
 ## [/codeblock]
 
-const CHECKS := 130
+const CHECKS := 135
+
+## The surf map's start height, for the bonus-route bounds check below.
+const START_Y := 2048.0
 
 var _passed := 0
 var _failed := 0
@@ -683,7 +686,124 @@ func _test_bonus_track() -> void:
 	var spawn := game.current_map_node().spawn_for(DotTimerTrack.of_bonus(1))
 	_check(bot.global_position.distance_to(spawn) < 1.0, "and spawns at the bonus's own spawn")
 	_check(bot.timer.track == DotTimerTrack.of_bonus(1), "and their timer is on it")
+
+	await _test_transfer_bonus()
+
 	game.timers.set_player_track(&"bot", DotTimerTrack.MAIN)
+
+
+## Bonus 2 on the surf map: two ramps banked opposite ways, with a gap.
+##
+## [b]The check that matters is the last one, and it is the only one an assertion
+## about the zone file cannot make.[/b] Bonus 1 is a single bank -- get on it, hold
+## it, ride it down -- and a bot that can do that can do it on any single bank. This
+## route ends the first ramp in mid-air and asks the player to catch a second one
+## banked the other way, so a bot that reaches the finish has proved the two pieces
+## of geometry actually line up. Numbers that are 200 units out produce a route that
+## looks perfect in a screenshot and drops every player into the pit.
+func _test_transfer_bonus() -> void:
+	var bot: G2GPlayer = game.players[&"bot"]
+	var transfer := DotTimerTrack.of_bonus(2)
+
+	_check(game.timers.set_player_track(&"bot", transfer), "and to the transfer bonus")
+
+	game.spawn_player(&"bot")
+	await get_tree().physics_frame
+
+	var spawn := game.current_map_node().spawn_for(transfer)
+	_check(
+		bot.global_position.distance_to(spawn) < 1.0,
+		"which has a spawn of its own, away from the first bonus's",
+		"%.1f m apart" % spawn.distance_to(game.current_map_node().spawn_for(DotTimerTrack.of_bonus(1)))
+	)
+
+	game.config.air_accelerate = 150.0
+	game.apply_movement()
+
+	# Off the pad first, then strafe. Same shape as the main surf run: the spawn is
+	# behind the lip and the strafing below carries the bot sideways, not forward.
+	await _prestrafe(&"bot", 300)
+
+	var started := false
+	var finished := false
+	var reset := false
+	var yaw := 0.0
+
+	var watch := func(id: StringName, zone: DotTimerZone) -> void:
+		if id == &"bot" and zone.kind == DotTimerZone.Kind.RESPAWN:
+			reset = true
+
+	game.timers.effect_requested.connect(watch)
+
+	for i in range(1200):
+		var c := DotFpsCommand.new()
+		var phase := (i / 90) % 2
+		c.move = Vector2(1.0 if phase == 0 else -1.0, 0.0)
+		yaw += -0.3 if phase == 0 else 0.3
+		c.yaw = wrapf(yaw, -180.0, 180.0)
+		bot.controller.apply_command(c)
+		await get_tree().physics_frame
+
+		if bot.timer.run.is_active():
+			started = true
+
+		if bot.timer.track == transfer and not bot.timer.run.is_active() and started:
+			finished = true
+			break
+
+		if reset:
+			break
+
+	game.timers.effect_requested.disconnect(watch)
+	game.config.air_accelerate = 1000.0
+	game.apply_movement()
+
+	_check(started, "leaving its pad starts a run on the bonus's own track")
+	# [b]Where it ENDS, not whether it cleared.[/b] A crude bot alternating strafe
+	# every ninety ticks is not a surfer and never will be; what it can prove is the
+	# thing the geometry has to be right for -- that the route holds a player from the
+	# pad to the bottom. The failure this catches is the one the first draft had: the
+	# second ramp covered only the back third of the first, so coming off early meant
+	# falling between them, and the bot ended 500 m under the level with nothing in
+	# the log to say so.
+	var at := bot.global_position
+	var floor_m := G2GUnits.to_metres(START_Y - 1700.0)
+	var roof_m := G2GUnits.to_metres(START_Y + 256.0)
+
+	_check(
+		at.y > floor_m and at.y < roof_m,
+		"and the route holds the bot between its pad and its floor",
+		"y %.1f m, route is %.1f to %.1f" % [at.y, floor_m, roof_m]
+	)
+
+	# The respawn zone the bonus tracks did not have. With it, a bot that does fall is
+	# put back on the pad instead of falling for ever -- so "not reset" now means it
+	# stayed on the route rather than meaning nothing was watching.
+	_check(
+		zones_have_respawn_on_bonuses(),
+		"and a bonus that is missed puts the player back, like the main track"
+	)
+
+
+## Whether every playable track on the current map has a respawn zone.
+func zones_have_respawn_on_bonuses() -> bool:
+	var zones := game.timers.zones
+
+	if zones == null:
+		return false
+
+	for track in zones.playable_tracks():
+		var found := false
+
+		for zone in zones.zones:
+			if zone.track == track and zone.kind == DotTimerZone.Kind.RESPAWN:
+				found = true
+				break
+
+		if not found:
+			return false
+
+	return true
 
 
 # --- The ghost -------------------------------------------------------------

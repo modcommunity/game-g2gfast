@@ -67,6 +67,69 @@ func _build() -> void:
 	G2GGeometry.box(self, Vector3(1536.0, START_Y - 1200.0 - 16.0, START_Z - 2200.0),
 		Vector3(512.0, 32.0, 512.0), G2GGeometry.COLOUR_END)
 
+	# Bonus 2: the transfer, on the other side of the start.
+	#
+	# [b]A different skill from bonus 1, not a longer version of it.[/b] That one is a
+	# single bank: get on it, hold it, ride it down. This is two banked the opposite
+	# way with a gap between them, so the run ends at the moment the first ramp stops
+	# and the player has to be airborne, pointed, and moving in the right direction to
+	# catch the second. Which way a surface throws you is the whole of surf, and a map
+	# with one ramp never asks the question twice.
+	#
+	# The direction each one throws is worth writing down, because it is the sign that
+	# is wrong first: `G2GGeometry.ramp` rotates about +Z, so a POSITIVE angle lifts
+	# the -X edge and the player slides toward +X. Bonus 1 uses the negative and runs
+	# the other way, which is why these numbers are not its mirror.
+	G2GGeometry.box(self, Vector3(-1536.0, START_Y - 16.0, START_Z + 256.0),
+		Vector3(384.0, 32.0, 384.0), G2GGeometry.COLOUR_BONUS)
+
+	# [b]A banked ramp is narrower in X than it is wide.[/b] At 60 degrees a 768-unit
+	# ramp occupies 768 * cos(60) = 384 units of X, so its lip is 192 either side of
+	# its centre and not 384 -- and its surface climbs 192 * tan(60) = 333 units over
+	# that. Every number below is placed off those two, because the first draft put
+	# the pad over a strip of X the ramp did not reach and the bot walked into the pit.
+	#
+	# Ramp one is centred UNDER the pad rather than beside it. The drop is 250 units
+	# onto the middle of the bank, which is a landing rather than an edge catch.
+	G2GGeometry.ramp(self, Vector3(-1536.0, START_Y - 250.0, START_Z - 600.0),
+		Vector3(768.0, RAMP_THICKNESS, 1600.0), RAMP_ANGLE, Vector3.FORWARD,
+		G2GGeometry.COLOUR_BONUS)
+
+	# And back the other way. Its high side sits at x -1300, just past where the first
+	# one's lip throws the player out at -1344, and 117 units below it -- so the
+	# transfer is a short fall onto a surface banked the opposite way rather than a
+	# gap that has to be jumped. The two meet in Z rather than leaving air between
+	# them: the skill being asked for is reading which way a surface throws you, and
+	# a hundred units of nothing in the middle of it turns that into a coin flip.
+	#
+	# [b]It runs the whole length of the first one, not the back half of it.[/b] A
+	# banked ramp throws you off its lip wherever you happen to reach it, and the first
+	# draft put the second ramp only under the last third of the first -- so a player
+	# who came off early fell through the gap between them and out of the level. Which
+	# is a route that works if you already know where the catch is, and is nothing if
+	# you do not.
+	G2GGeometry.ramp(self, Vector3(-1492.0, START_Y - 1033.0, START_Z - 1000.0),
+		Vector3(768.0, RAMP_THICKNESS, 2800.0), -RAMP_ANGLE, Vector3.FORWARD,
+		G2GGeometry.COLOUR_BONUS)
+
+	# A floor under the whole thing, falling toward the finish in steps, the way the
+	# main track's valley does. On a tier-3 map's bonus the punishment for losing the
+	# bank is losing the time, not losing the run: the floor is slow, it is reachable,
+	# and it ends at the same pad the ramps do.
+	var bonus_steps := 8
+	for i in range(bonus_steps):
+		var t := float(i) / float(bonus_steps - 1)
+		G2GGeometry.box(
+			self,
+			Vector3(-1500.0, lerpf(START_Y - 700.0, START_Y - 1500.0, t) - 16.0,
+				lerpf(START_Z, START_Z - 3000.0, t)),
+			Vector3(640.0, 32.0, 3000.0 / float(bonus_steps) + 64.0),
+			G2GGeometry.COLOUR_FLOOR
+		)
+
+	G2GGeometry.box(self, Vector3(-1500.0, START_Y - 1560.0 - 16.0, START_Z - 3300.0),
+		Vector3(768.0, 32.0, 640.0), G2GGeometry.COLOUR_END)
+
 
 func timer_zones() -> DotTimerZoneSet:
 	return build_zones()
@@ -112,5 +175,24 @@ static func build_zones() -> DotTimerZoneSet:
 	zones.add(zone_box(DotTimerZone.Kind.END, bonus,
 		Vector3(1280.0, START_Y - 1300.0, START_Z - 2456.0), Vector3(1792.0, START_Y - 900.0, START_Z - 1944.0)))
 	zones.add(zone_spawn(bonus, Vector3(1536.0, START_Y + 8.0, START_Z + 300.0), 0.0))
+
+	var transfer := DotTimerTrack.of_bonus(2)
+	zones.add(zone_box(DotTimerZone.Kind.START, transfer,
+		Vector3(-1728.0, START_Y, START_Z + 64.0), Vector3(-1344.0, START_Y + 256.0, START_Z + 448.0)))
+	zones.add(zone_box(DotTimerZone.Kind.END, transfer,
+		Vector3(-1884.0, START_Y - 1700.0, START_Z - 3620.0),
+		Vector3(-1116.0, START_Y - 1180.0, START_Z - 2980.0)))
+	zones.add(zone_spawn(transfer, Vector3(-1536.0, START_Y + 8.0, START_Z + 300.0), 0.0))
+
+	# [b]A respawn zone per bonus, because a zone belongs to a track.[/b] The main
+	# track has had one since the map was written and both bonuses had none, so a
+	# player who missed a bonus ramp did not get put back -- they fell, and kept
+	# falling, for as long as they were prepared to watch. It is the main track's own
+	# bug from before `DotTimer.effect_requested` was connected, still live on two
+	# tracks, and it stayed invisible because nothing had ever driven a bonus.
+	for track in [bonus, transfer]:
+		zones.add(zone_box(DotTimerZone.Kind.RESPAWN, track,
+			Vector3(-16384.0, END_Y - 4096.0, END_Z - 16384.0),
+			Vector3(16384.0, END_Y - 1536.0, START_Z + 16384.0)))
 
 	return zones
