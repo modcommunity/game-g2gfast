@@ -86,7 +86,7 @@ one — `player_forward`, `player_back`, `player_left`, `player_right`, `player_
 the [InputMap] at runtime for a project that has none. Six actions declared once and
 read nowhere, which is the family's own detector for a setting that does not exist.
 Removing them rather than wiring them up is what makes this game's client work
-**inside another project**: it now ships in dot-server-setup-test's browser shell,
+**inside another project**: it now ships in dot-server-deploy's browser shell,
 whose `project.godot` has no input actions at all, and a game that depended on its own
 would have had no controls there.
 
@@ -95,7 +95,7 @@ README said Shift for as long as the dead block did, and neither was ever true.
 
 ## Where this game runs, besides here
 
-`dot-server-setup-test` vendors it: `setup.sh` copies `game/`, `scenes/`, `maps/` and
+`dot-server-deploy` vendors it: `setup.sh` copies `game/`, `scenes/`, `maps/` and
 `avatars/` into that project, `content/g2gfast/game.yml` points at
 `res://scenes/g2g_server.tscn` and `res://game/g2g_module.gd`, and the browser shell
 maps content id `g2gfast` to `res://game/g2g.tscn`. That is the deployment shape — a
@@ -556,7 +556,7 @@ commands, because twenty years of bhop servers taught everybody's fingers those.
 
 `G2GGame._resolve_tick_rate` takes `Engine.physics_ticks_per_second`, which on a server
 is `sv_tickrate` and on a client is whatever the host project exported — 128 in this
-repository, **60 in dot-server-setup-test's browser shell, which never sets one**. So a
+repository, **60 in dot-server-deploy's browser shell, which never sets one**. So a
 client simulated at a rate the server did not, and three things are derived from that
 number: the step prediction replays with, the divisor every replicated run time is
 reconstituted through, and `DotNetClock`'s own rate.

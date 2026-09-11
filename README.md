@@ -77,7 +77,7 @@ g2g_zone_save
 
 ## Playing it in a browser
 
-`dot-server-setup-test` vendors this game into its server tool and its browser client shell, so `./demo.sh up` there brings up a g2gfast server with a page you can open — no Godot on the player's machine at all. The two projects stay in step through that project's `setup.sh`, which copies `game/`, `scenes/`, `maps/` and `avatars/` across, and its `tools/check.sh`, which fails if the copy has gone stale.
+`dot-server-deploy` vendors this game into its server tool and its browser client shell, so `./demo.sh up` there brings up a g2gfast server with a page you can open — no Godot on the player's machine at all. The two projects stay in step through that project's `setup.sh`, which copies `game/`, `scenes/`, `maps/` and `avatars/` across, and its `tools/check.sh`, which fails if the copy has gone stale.
 
 ## What it uses
 

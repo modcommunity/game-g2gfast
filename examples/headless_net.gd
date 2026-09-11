@@ -209,7 +209,7 @@ func _build() -> bool:
 	# halves read `Engine.physics_ticks_per_second`, so they agreed no matter what the
 	# wire carried — while a real client is a separate process whose rate is its own
 	# project's export and has nothing to do with the server's `sv_tickrate`. The
-	# client shell in dot-server-setup-test never sets one at all and runs at 60.
+	# client shell in dot-server-deploy never sets one at all and runs at 60.
 	#
 	# So put the client on a rate the server is not on, the way a host project would,
 	# and let HELLO be what corrects it. Every check after this one is then running

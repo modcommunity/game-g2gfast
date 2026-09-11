@@ -32,7 +32,7 @@ extends RefCounted
 ##
 ## Nothing is vendored here and nothing fails without it: a missing directory falls
 ## back to the generated grid, which is a legitimate look rather than an error state.
-## `dot-server-setup-test/setup.sh` copies this directory into its own build, so
+## `dot-server-deploy/setup.sh` copies this directory into its own build, so
 ## anything put here ships in the browser export as well.
 const TEXTURE_DIR := "res://textures/prototype"
 
