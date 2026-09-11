@@ -481,12 +481,33 @@ func _test_auto_bhop_gate() -> void:
 
 func _test_zone_files_match() -> void:
 	print("the shipped zone files match the maps")
-	for id in ["bhop_g2g_intro", "surf_g2g_intro"]:
+	# Every hand-written map the catalogue finds, and not a list of them.
+	#
+	# [b]This was `["bhop_g2g_intro", "surf_g2g_intro"]`, and there are three.[/b]
+	# `bhop_g2g_stages` was never checked against its own sidecar, so the file in
+	# `maps/` drifted away from what the map builds and nothing said a word — the same
+	# stale copied list this tree has now had in `setup.sh`, `tools/check.sh`,
+	# `tools/package_check.sh`, both bootstrap scripts and `tools/export_zones.gd`,
+	# which is the file this loop exists to check the output of and which stopped
+	# carrying a list for exactly this reason.
+	for id in _hand_written_map_ids():
 		var loaded := DotTimerZoneSet.load_json("res://maps/%s.zones.json" % id)
 		var built: DotTimerZoneSet = (load("res://maps/%s.gd" % id) as GDScript).build_zones()
 		_check(loaded.ok and (loaded.value as DotTimerZoneSet).fingerprint() == built.fingerprint(),
 			"%s's file matches what the map builds" % id)
 	await get_tree().process_frame
+
+
+## The hand-written maps: the ones with a script of their own, discovered rather than
+## named. Deliberately the same question `tools/export_zones.gd` asks, because a map
+## this suite does not know about is a map the exporter never wrote a file for.
+func _hand_written_map_ids() -> Array:
+	var out: Array = []
+	for map in G2GMapCatalogue.scan():
+		if not bool(map.meta.get("imported", false)):
+			out.append(String(map.id))
+	out.sort()
+	return out
 
 
 # --- Runs ------------------------------------------------------------------

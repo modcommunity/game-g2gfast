@@ -78,6 +78,16 @@ if [ "$prune" -eq 1 ]; then
     done
 fi
 
+# A zone file for a map nobody has is the stale-list shape this tree has now hit in
+# setup.sh, tools/check.sh, package_check.sh and both bootstrap scripts. It is not an
+# error -- somebody may be about to drop the .bsp in -- but it is worth saying, because
+# the alternative is a file that describes a finish line for a map that is not there.
+for zf in "$here"/maps/zones/*.json; do
+    [ -e "$zf" ] || continue
+    zid="$(basename "$zf" .json)"
+    [ -n "${wanted[$zid]:-}" ] || echo "  note: maps/zones/$zid.json describes a map with no .bsp in $src"
+done
+
 echo
 echo "$imported imported, $skipped up to date, $removed removed, $failed failed"
 

@@ -111,13 +111,24 @@ func _build() -> void:
 
 	var last: Dictionary = course[course.size() - 1]
 
+	# The finish pad, from `_pad_centre` and not from an offset written out again here.
+	#
+	# [b]It was `last.z - 384`, and the course does not end heading -Z.[/b] The turn in
+	# stage 2 leaves the cursor at yaw 90 and every stage after it inherits that, so the
+	# last block heads -X — and a pad offset along world -Z landed 543 units off the
+	# finish zone, which is drawn 384 units along the HEADING. The two boxes overlapped
+	# by a 128 x 24 corner nothing lands on: the player ran onto a pad drawn in the
+	# finish colour, stopped, and the timer went on counting for ever. Nothing errored,
+	# because a run that has not finished is a legitimate thing for a run to be.
+	#
+	# One function now answers "where is the finish", and the geometry and the zone both
+	# call it. That is this map's own rule -- `_course()` is the single source for the
+	# blocks -- applied to the one place that was still doing the arithmetic twice.
+	var end_at := _pad_centre(last)
+
 	G2GGeometry.box(
 		self,
-		Vector3(
-			float(last["x"]),
-			float(last["y"]) - BLOCK_THICKNESS * 0.5,
-			float(last["z"]) - 384.0
-		),
+		Vector3(end_at.x, end_at.y - BLOCK_THICKNESS * 0.5, end_at.z),
 		Vector3(BLOCK_WIDTH + 128.0, BLOCK_THICKNESS, 512.0),
 		G2GGeometry.ROLE_END,
 		Basis(Vector3.UP, deg_to_rad(float(last["yaw"])))

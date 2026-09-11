@@ -64,15 +64,19 @@ maps/               bhop_g2g_intro, surf_g2g_intro, and their .zones.json
   imported/<id>/    what tools/bsp_import.py wrote: <id>.bin, <id>.json, the lightmap
                     atlas and the textures. Data only -- no scene, no script.
                     Derived; gitignored; never hand-edited
+  zones/<id>.json   what a .bsp does NOT say about itself: which volume is the finish,
+                    and why. Hand-written, checked in, merged at import. See
+                    Decision 11 and maps/zones/README.md
 avatars/            six stock parts and the tint shader
 scenes/
   g2g_server.tscn   what a dot-server loads. A G2GGame under a plain Node
-examples/           headless_run (93), headless_net (85), dedicated (52),
-                    headless_imported (21 per imported map), headless_maps (23)
+examples/           headless_run (129), headless_net (90), dedicated (121),
+                    headless_imported (25 per map, plus one per track and stage),
+                    headless_maps (24), jitter_probe (4 configurations)
 tools/              export_zones.gd — run after changing a map
                     bsp_read.py, vtf.py, bsp_import.py — Source .bsp to a map
                     import_maps.sh — import a whole directory of them, idempotently
-                    bsp_preview.gd/.tscn — render an imported map and exit
+                    bsp_preview.gd/.tscn/.sh — render an imported map and exit
 ```
 
 **There is no `[input]` block in `project.godot`, and that is deliberate.** There was
@@ -184,7 +188,9 @@ refused: a player is never invisible because their hat is from the future.
 
 ## The maps, and how they are textured
 
-Three of them now: `bhop_g2g_intro`, `surf_g2g_intro` and `bhop_g2g_stages`.
+Three of them now: `bhop_g2g_intro`, `surf_g2g_intro` and `bhop_g2g_stages`, plus whatever has been imported.
+
+**The default is an imported map, and not one of the three.** `G2GConfig.initial_map` is `surf_mesa`. A straight line of blocks over a flat plane is what a *suite* should run — and every example here still names one explicitly — but it is not what a player arriving at a server should be met by. It also makes the imported half the default path rather than the one nothing reaches unless somebody types a map name, which is this family's own rule about deployment shapes: a built-in map is a scene and a script and can never fail to be there, and an imported map is data at a path that has to be found, parsed and built.
 
 **`bhop_g2g_stages` is the first one that is a map rather than a fixture.** The other
 two are a straight line of blocks and a pair of ramps: they prove the movement and there
@@ -205,6 +211,14 @@ every block; the geometry and the zones both read that one list. On a map that *
 that is not a nicety — a hand-placed stage line on a course whose gaps somebody later
 changes is a leaderboard nobody can compare, and nothing reports it: the run still
 finishes, the splits are just taken somewhere else.
+
+**And it had no finish, for as long as it has existed.** `_build` drew the finish pad 384 units along world -Z; `build_zones` placed the finish zone 384 units along the *course heading*, which the turn in stage 2 leaves at 90 degrees and every stage after it inherits. So the pad sits at -Z and the zone sits at -X, 543 units apart, overlapping by a 128 x 24 corner nothing lands on. A player ran the whole map, arrived on a pad drawn in the finish colour, stopped, and the timer counted on for ever. Nothing errored and nothing could: a run that has not finished is a legitimate thing for a run to be, and the pad was exactly where the geometry said to put it.
+
+`_pad_centre()` answers "where is the finish" now and the geometry and the zone both call it — this map's own rule about `_course()`, applied to the one place that was still doing the arithmetic twice.
+
+What let it survive is the more useful half. `headless_maps` asserted the zone set is well formed, `headless_run` asserted the sidecar matches, `headless_imported` drove a timer over the eight imported maps — **and every one of those checks is about the zones, not about the zones adding up to a run.** The check that says so has to cross from the zone set into the geometry, so it is a raycast: drop a ray down the middle of every START, END and STAGE volume and require it to land inside that volume. A zone hanging over nothing is a zone the run never reaches, and from inside the game it is indistinguishable from a map with no end zone in it. It fails on `bhop_g2g_stages` without the fix and passes with it.
+
+The stale-list bug came along for the ride: `_test_zone_files_match` carried `["bhop_g2g_intro", "surf_g2g_intro"]` and there are three maps, so `bhop_g2g_stages` had never been checked against its own sidecar. The files happened to agree; the check was blind either way. It discovers now, which is what `tools/export_zones.gd` stopped carrying a list for.
 
 Its bonus is a **surf** descent on a bhop map, deliberately. A bonus track is a whole
 second route with its own records, and making it the same thing as the main route wastes
@@ -415,12 +429,12 @@ work either way; where it is drawn is the half a game is supposed to decide.
 ```bash
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_run.tscn   # 110 checks
+godot --headless --path . res://examples/headless_run.tscn   # 129 checks
 godot --headless --path . res://examples/headless_net.tscn   # 90 checks
 godot --headless --path . res://examples/dedicated.tscn      # 121 checks
 godot --headless --path . res://examples/jitter_probe.tscn   # 4 configurations
-godot --headless --path . res://examples/headless_imported.tscn  # 21 per imported map
-godot --headless --path . res://examples/headless_maps.tscn      # 23 checks
+godot --headless --path . res://examples/headless_imported.tscn  # 25 per map, +1 per stage
+godot --headless --path . res://examples/headless_maps.tscn      # 24 checks
 ```
 
 `headless_maps` is the one that says there is no list of maps anywhere: it removes a
@@ -432,6 +446,19 @@ three maps proves nothing — a hardcoded list of three counts three too.
 map is optional content and a fresh clone that has never run the importer is not
 broken. It iterates whatever is there rather than naming a map, for the reason the
 catalogue does.
+
+Its last two sections are the ones that say a map is a **level**. `_test_runnable`
+drives a `DotTimer` over the map's own zone set and asserts a time comes out with every
+split in it; `_test_stands_where_it_sends_you` teleports a player to each track's spawn
+and each `!s<n>` destination and waits to see whether they are still there a second
+later. A zone set can pass `problems()`, have no thin volumes and still be impossible to
+finish, and a stage destination that is in the sky succeeds at every step and drops the
+player out of the world.
+
+`tools/bsp_preview.sh` renders each of them from its spawn, because four of the bugs in
+this family's list were found by looking at a picture. It uses `xvfb-run`: `--headless`
+gives a null renderer and saves a frame of nothing, which is worse than no screenshot
+because it looks like one.
 
 `jitter_probe` is the only one that measures a **rendered frame** rather than a
 simulated tick, which is the whole class of bug the others cannot reach. See
@@ -680,8 +707,10 @@ exercised this.
 
 `tools/bsp_import.py` turns a Counter-Strike: Source `.bsp` into a map this game
 loads: geometry, the textures the file carried inside itself, the lighting its
-compiler baked, and the volumes that catch a player who fell off the ride. It was
-written against `surf_kitsune` and `Surf_Mesa` in `godot/inspirations/`.
+compiler baked, its start line, its finish, its stages, its bonus tracks and the
+volumes that catch a player who fell off the ride. It was written against
+`surf_kitsune` and `Surf_Mesa` in `godot/inspirations/`, and now runs over the eight
+maps there.
 
 **The scale is not converted, because there is nothing to convert.** Source stores map
 coordinates at 0.75 inch per unit and [G2GUnits] already declares exactly that ratio,
@@ -691,13 +720,48 @@ axis swap, because Source is Z-up and Godot is Y-up:
 
     godot = (src.x, src.z, -src.y)
 
-**START and END zones are deliberately not guessed.** A `.bsp` is compiled: the brush
-entity that knew "this is the start platform" is gone, and CS:S has no convention that
-survives. `surf_kitsune` drives its stages with
-`OnTrigger !activator,AddOutput,targetname X` and a filter chain, which is a program
-and not a label. What IS reliable is `trigger_teleport` — the pit — and that maps
-exactly onto `DotTimerZone.Kind.RESPAWN`. An imported map arrives playable and
-untimed; the timing zones are a hand-written pass, which is the honest division.
+**START and END zones are read, not guessed — and where there is nothing to read they
+are written down by hand.** The paragraph that stood here said a CS:S map has no
+convention for a start and a finish that survives compilation. That is true of
+`surf_kitsune`, which really does drive its stages with
+`OnTrigger !activator,AddOutput,targetname X` and a filter chain, and it was false of
+five of the eight maps beside it, which carry `zone_start`, `map_end_zone`,
+`startzone_s4`, `tm_bonus2_endzone` and `tm_checkpoint1` in the entity lump in plain
+text, because they were built for a timer. **Reading a label the mapper wrote is not
+guessing, and throwing it away cost every one of those maps its timer.** `zone_role()`
+is the whole rule; `assign_tracks()` turns `bonus2`, `koga` and `b_` into track
+numbers.
+
+Three of the eight label nothing, and for those — and for the halves the labelled ones
+are missing — there is **`maps/zones/<id>.json`**: one file per map, checked in, saying
+which volume is the finish and *why*, in terms of what is in the .bsp rather than in
+coordinates somebody typed. A zone there names its volume as an entity
+(`"named": "startzone_s4"`), as the teleport aimed somewhere (`"teleport_to":
+"endroomdest"`), as a box grown around a destination, or as the nearest trigger to a
+point; anything that fails to resolve **stops the import**, because a finish line that
+quietly resolved to nothing is a map nobody can finish and nothing about playing it
+would say so. `maps/zones/README.md` is the format.
+
+That directory is beside the repository and not beside the import for one reason:
+`tools/import_maps.sh --force` rewrites every manifest, so a hand-written zone kept in
+one would survive exactly until somebody re-imported the map it describes.
+
+**A track with a start and no end is dropped, and said so.** `surf_summit`'s third
+bonus has a start zone, eight checkpoints and no finish anywhere in the map. Left in,
+it is a track a player can begin and never complete and one `DotTimerZoneSet.problems()`
+refuses the whole map over; dropped silently it is a bonus that quietly does not exist.
+
+**A teleport is the pit unless the map says otherwise.** Every `trigger_teleport` left
+after the zones have claimed theirs becomes `DotTimerZone.Kind.RESPAWN`, which is what
+it always was and the reliable half. `surf_kitsune` is where that is not enough: all 53
+of its teleports aim at one of nine colour destinations, and the ones the size of a
+room are the pit under that colour's section while the ones the size of a door are how
+you leave one section for the next. Treated alike — which is what "every teleport is a
+RESPAWN" does — **walking out of the first section ends the run and puts the player back
+at the start, for ever.** `"doorways": {"max_horizontal": 512}` in the map's own file
+opts into the measurement that separates them, and the doors become
+`Kind.TELEPORT`, which keeps the run. It is opt-in because it is only true of a map
+whose sections are joined by doors.
 
 **The mesh is a binary and not a glTF, and the reason is one array.** The baked
 lighting needs `ARRAY_TEX_UV2` to reach the shader, and every route through an
@@ -707,7 +771,7 @@ and its emissive channel is additive, so it washes out. Building the [ArrayMesh]
 `PackedByteArray` costs one pass and keeps this repository's own convention anyway —
 maps here are made in code.
 
-**Imported maps are discovered, not listed.** `G2GGame._add_imported_maps` scans
+**Imported maps are discovered, not listed.** `G2GMapCatalogue.scan` scans
 `maps/imported/` for manifests. The three hand-written maps above it are a list because
 they cannot appear without somebody editing this repository; an imported one arrives by
 running a script, and a second place to remember it is the shape that has gone stale
@@ -755,6 +819,69 @@ without it.
   printed **19 passed, 0 failed**. `headless_imported` asserts its own check count for
   that reason, which is the guard this tree already knew it needed.
 
+### What importing the other six found
+
+The importer had been run on two maps. Running it on the eight in
+`godot/inspirations/g2gfast/` — and then asking whether each one could be *finished*
+rather than merely loaded — found five more, and four of them were in the two maps that
+had already been imported and passing.
+
+- **A brush model's bounds are relative to the entity's `origin` key, and the importer
+  ignored it.** vbsp moves a brush entity's geometry so its origin sits at (0,0,0) and
+  records where that was; only worldspawn, whose origin is the world's, is the same
+  either way. So **every pit volume in both imported maps was drawn piled around the
+  centre of the map**, where no player goes. Nothing errored and nothing could: a
+  RESPAWN volume that is never entered is indistinguishable from one nobody has fallen
+  into yet, and the suite's zone section counted them and measured their thickness
+  without ever asking where they were. Confirmed against the faces rather than reasoned
+  about — for every trigger in `surf_kitsune` the model's own vertices span exactly the
+  model's bounds, and the origin is the offset to where the mapper drew it.
+
+- **Three of the eight maps have LZMA-compressed lumps and nothing in the header says
+  so.** `bspzip -repack -compress` is what every map host runs, because a 112 MB `.bsp`
+  is a 112 MB download for every player who joins; it rewrites each lump as a
+  `lzma_header_t` plus a raw LZMA1 stream and leaves the file's VBSP version at 20. The
+  reader read the compressed bytes as structures, got a plausible plane array out of
+  them, and died in the texture string table — which is simply the first lump whose
+  contents are checked against anything. `surf_aquaflow`, `surf_arcade` and
+  `surf_interference` could not be imported at all, and the failure named the wrong lump.
+
+- **A spawn yaw was never converted.** Positions crossed the axis boundary and the
+  angle beside them did not. Source measures yaw about +Z from +X and `DotFpsMotor`
+  builds forward as `(-sin y, 0, -cos y)`; solving the two against each other gives
+  `yaw - 90`, and the manifest was writing Source's number straight through. **No number
+  is wrong when this is wrong** — the player stands in exactly the right place facing
+  the wrong way, which on a map with an obvious route reads as the spawn being fine.
+
+- **A spawn 8 units above the floor is a coin toss.** `Surf_Mesa`'s spawn destination
+  sits 25 units over its platform. Dropped from 10168 the player lands; from 10170 the
+  player lands; from **10169**, which is where an 8-unit lift put them, the player goes
+  through the floor and keeps going — and moving them one unit in x, or 320 units in y,
+  fixes it. One point, on one map, and it was the point the map shipped with. A capsule
+  that starts that close to a triangle seam is a coin toss whichever way the collision
+  backend rounds, so the answer is not to start there: the lift is 24 units, which is
+  clear of the seam and still leaves a 94.5-unit player 9 units of headroom under
+  Source's own minimum 128-unit ceiling. **The `--check-only` pass and every assertion
+  about the zone set passed throughout**; what found it was the one check that puts a
+  player on the map and waits.
+
+- **Two brushes sharing a targetname are ONE entity in Source, and mappers use that.**
+  `surf_summit`'s `tm_checkpoint1` is a pair, one in each of the map's two mirrored
+  lanes. Emitted as two zones they are two stage zones with the same number, which
+  `DotTimerZoneSet.problems()` refuses — correctly — so the map went from "no timer at
+  all" to "no timer, and now it says why". They are unioned back into the one volume the
+  map always meant.
+
+And one in the suite, which is worth the same: **`headless_imported` had four zone
+checks and not one of them asked whether a run could be finished.** A zone set with a
+start, a finish, stages numbered 1..n and no thin volumes passes every one of them and
+can still be impossible to complete. `_test_runnable` drives a `DotTimer` over the map's
+own zones — start, away, each stage, finish — and asserts a time comes out with every
+split in it; `_test_stands_where_it_sends_you` teleports a player to each track's spawn
+and each `!s<n>` destination and waits to see whether they are still there. Those two
+are what say these are levels rather than geometry, and writing them found the
+`Surf_Mesa` spawn above and two more artefacts of stepping a timer by hand.
+
 ### What is not imported
 
 - **Static props.** `Surf_Mesa` carries 17 `.mdl` models in its pakfile and the
@@ -801,7 +928,12 @@ in the build is not silently replaced by one dropped in beside it.
 cp somewhere/surf_whatever.bsp ../inspirations/g2gfast/
 tools/import_maps.sh            # imports what is new, skips what is current
 tools/import_maps.sh --prune    # and deletes imports whose .bsp is gone
+tools/bsp_preview.sh            # and renders every one of them from its spawn
 ```
+
+If the import prints `NO START` or `NO END` for the main track, the map labels neither
+and needs a `maps/zones/<id>.json`. It is still offered — a map you can walk around is
+worth having — but nothing will time a run on it.
 
 and on a running server, `g2g_maps_reload` rescans without a restart.
 
@@ -979,6 +1111,33 @@ This game keys players by `StringName`; dot-combat and dot-effects both key by `
 since the class was written and nothing went the other way. A caller that hashed the name
 instead would get a number that is stable, plausible, and **not** the one the health, the
 hitboxes and the kill feed use.
+
+## `!spec` did nothing, and `g2g_map` deliberately still does
+
+Two halves of the same gate, and they point opposite ways.
+
+`G2GServices` hooks `player_command` as well as `player_chat`. Without it,
+`DotChatRouter.command_entered` **could not fire**: dot-server's chat manager checks for
+a command prefix before it fires `player_chat`, `_handle_command` returns on every path
+including the unknown one, and its prefixes are `["!", "/"]` — identical to
+`DotChatRules`'. So no `!` line ever reached the router.
+
+`!rtv` survived that because `rtv` is also a console alias registered `.with_chat()`.
+**`!spec` and `!spectate` are handled nowhere else and did nothing at all** — and the
+module's own `_` branch said "left for dot-server's own chat commands", which was true
+for `!r`, `!wr` and `!top` and quietly false for the two this game added later.
+
+**`g2g_map` is console-only on purpose and `examples/dedicated.gd` asserts it** —
+`not map_command.chat_allowed`, in so many words. It is the only command in its block
+without `.with_chat()`, which reads exactly like an oversight and is not: a map change
+destroys every run in progress, so a records server does not let a player do that by
+typing. It goes through the console, RCON, or the vote.
+
+That assertion earned its keep: it caught the flag being added and the suite went to
+120/1 on the spot. **A missing flag its neighbours have is evidence of nothing until you
+have checked whether a suite asserts the difference.** A command relayed from the website
+arrives as `Source.CHAT` and is refused here too; `DotChatRelayConfig.command_source` is
+the switch for an operator who wants their site admins to reach it.
 
 ## Things deliberately not here
 

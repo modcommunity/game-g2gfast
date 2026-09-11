@@ -13,7 +13,10 @@ extends Node
 ## *removed*, and one the disk holds and the catalogue does not is *added*, without
 ## anybody naming either.
 
-const EXPECTED_CHECKS := 24
+## Checks that do not depend on how many maps are on disk. `_test_zones_have_floor`
+## adds one per hand-written map, which is a number this file deliberately does not
+## write down -- see [method _test_zones_have_floor].
+const EXPECTED_FIXED_CHECKS := 24
 
 var _passed := 0
 var _failed := 0
@@ -33,12 +36,14 @@ func _run() -> void:
 	_test_derivations()
 	await _test_rescan()
 	await _test_client_config()
+	await _test_zones_have_floor()
 
 	print("")
-	if _passed + _failed != EXPECTED_CHECKS:
+	var expected := EXPECTED_FIXED_CHECKS + _hand_written_map_ids().size()
+	if _passed + _failed != expected:
 		_failed += 1
 		_failures.append("the suite ran %d checks and should run %d — one aborted"
-			% [_passed + _failed, EXPECTED_CHECKS])
+			% [_passed + _failed, expected])
 	print("%d passed, %d failed" % [_passed, _failed])
 	for line in _failures:
 		print("  FAIL  %s" % line)
@@ -174,3 +179,82 @@ func _test_client_config() -> void:
 		layered.error.message if not layered.ok else "")
 	_check(config.initial_map != &"" or before == &"",
 		"and still names a map afterwards", String(config.initial_map))
+
+
+## Every zone a player has to STAND in has geometry under it.
+##
+## [b]This is the check that was missing, and a map shipped for months without it.[/b]
+## `bhop_g2g_stages` drew its finish pad 384 units along world -Z and placed its finish
+## zone 384 units along the COURSE HEADING, which is -X after the turn in stage 2 —
+## 543 units apart, overlapping by a corner nothing lands on. The player ran the whole
+## map, arrived on a pad drawn in the finish colour, stopped, and the timer counted on
+## for ever. Every existing assertion passed: the zone set is well formed, the stages
+## are numbered, the tier is right, the kind is right. **They are all about the zones
+## and none of them was about the zones adding up to a run.**
+##
+## A raycast is what says so, because it is the only question that crosses from the
+## zone set into the geometry: drop a ray down the middle of every START, END and STAGE
+## volume and require it to land inside that volume. A zone hanging in the air over
+## nothing is a zone the run never reaches, and it looks exactly like a map with a
+## missing end zone from inside the game.
+##
+## Over the maps the catalogue FINDS, and not over a list of them. A list of three ids
+## here is the bug the catalogue exists to prevent, one level up, and this tree has
+## already had it in `setup.sh`, `tools/check.sh`, `tools/package_check.sh`, both
+## bootstrap scripts, `tools/export_zones.gd` and `headless_run`'s sidecar check — where
+## a fourth map would simply not have been looked at, silently.
+func _test_zones_have_floor() -> void:
+	print("zones sit on the geometry")
+
+	for id in _hand_written_map_ids():
+		var scene: PackedScene = load("res://maps/%s.tscn" % id)
+		var map := scene.instantiate() as G2GMap
+		add_child(map)
+
+		# Two, because `add_child` puts the bodies in the space and the space is
+		# flushed at the next step: a ray cast in the same frame hits nothing at all,
+		# which reads as every zone in the map being broken.
+		await get_tree().physics_frame
+		await get_tree().physics_frame
+
+		var space := map.get_world_3d().direct_space_state
+
+		var floating := PackedStringArray()
+
+		for zone: DotTimerZone in map.timer_zones().zones:
+			if zone.kind != DotTimerZone.Kind.START \
+					and zone.kind != DotTimerZone.Kind.END \
+					and zone.kind != DotTimerZone.Kind.STAGE:
+				continue
+
+			var centre := zone.centre()
+			var query := PhysicsRayQueryParameters3D.create(
+				Vector3(centre.x, zone.to.y, centre.z),
+				# A hair below the floor of the zone, because the pad's top surface IS
+				# the zone's lower bound on every map here and a ray that stops exactly
+				# on it is a coin toss in 32-bit.
+				Vector3(centre.x, zone.from.y - 0.05, centre.z)
+			)
+
+			if not space.intersect_ray(query):
+				floating.append("%s %d" % [
+					DotTimerZone.kind_name(zone.kind), zone.track
+				])
+
+		_check(floating.is_empty(),
+			"%s stands every zone on something" % id, ", ".join(floating))
+
+		map.queue_free()
+		await get_tree().process_frame
+
+
+## The hand-written maps: the ones with a script of their own, discovered rather than
+## named. An imported map has no geometry until `build_from` runs and is covered by
+## `headless_imported`, which drives a timer over each one's own zone set.
+func _hand_written_map_ids() -> Array:
+	var out: Array = []
+	for map in G2GMapCatalogue.scan():
+		if not bool(map.meta.get("imported", false)):
+			out.append(String(map.id))
+	out.sort()
+	return out

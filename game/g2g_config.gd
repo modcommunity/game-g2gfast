@@ -99,7 +99,21 @@ extends DotConfig
 
 @export_group("Content")
 
-@export var initial_map: StringName = &"bhop_g2g_intro"
+## The map a server loads when it boots.
+##
+## [b]An imported map, and not one of the three built in code.[/b] `bhop_g2g_intro` is
+## sixteen blocks in a straight line: it proves the movement and it is what a suite
+## should run, which is why every example here still sets it explicitly. It is not what
+## a player arriving at a public server should be met by. `surf_mesa` is a real
+## imported map — one long descent with a start, a finish, a pit and a push volume —
+## and it is the default for the same reason a server ships with a map rather than with
+## a test fixture.
+##
+## It also makes the imported half the DEFAULT path rather than the one nothing reaches
+## unless somebody types a map name, which is this family's own rule about deployment
+## shapes: the built-in maps are a scene and a script and can never fail to be there,
+## and an imported map is data at a path that has to be found, parsed and built.
+@export var initial_map: StringName = &"surf_mesa"
 
 ## An extra directory to find imported maps in, outside the build.
 ##

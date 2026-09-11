@@ -1069,6 +1069,11 @@ def main(argv=None):
     for track, name in dropped:
         print("  track %d (%s) was dropped: a track needs both a start and an end"
               % (track, name))
+    # Said out loud rather than kept: a note nothing prints is this family's own
+    # "produced correctly and consumed by nothing", and two volumes quietly becoming
+    # one is exactly the kind of thing somebody wants to be told about.
+    for note in z.notes:
+        print("  note: %s" % note)
     print("  start spawn at %s units" % [round(v) for v in manifest["spawn"]["origin"]])
 
     print("  drop that directory anywhere the game looks and it is a map:")
