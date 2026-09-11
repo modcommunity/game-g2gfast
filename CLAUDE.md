@@ -68,6 +68,8 @@ maps/               bhop_g2g_intro, surf_g2g_intro, and their .zones.json
                     and why. Hand-written, checked in, merged at import. See
                     Decision 11 and maps/zones/README.md
 avatars/            six stock parts and the tint shader
+textures/prototype/ the installed prototype set: one PNG per G2GTextures.Role, CC0,
+                    and what the IMPORTED maps draw in. See its README
 scenes/
   g2g_server.tscn   what a dot-server loads. A G2GGame under a plain Node
 examples/           headless_run (129), headless_net (90), dedicated (121),
@@ -77,6 +79,9 @@ tools/              export_zones.gd — run after changing a map
                     bsp_read.py, vtf.py, bsp_import.py — Source .bsp to a map
                     import_maps.sh — import a whole directory of them, idempotently
                     bsp_preview.gd/.tscn/.sh — render an imported map and exit
+                    collision_probe.gd/.tscn — drop the player's hull on every
+                    standable triangle in an imported map and count what it goes
+                    through. `--trimesh` builds the old collider for comparison
 ```
 
 **There is no `[input]` block in `project.godot`, and that is deliberate.** There was
@@ -194,7 +199,7 @@ Three of them now: `bhop_g2g_intro`, `surf_g2g_intro` and `bhop_g2g_stages`, plu
 
 **`bhop_g2g_stages` is the first one that is a map rather than a fixture.** The other
 two are a straight line of blocks and a pair of ramps: they prove the movement and there
-is one thing to do in each, once. It is the Counter-Strike staged shape — five sections
+is one thing to do in each, once. It is the timer community's staged shape — five sections
 with a line between each, one idea per section, so a player who fails knows which idea
 they failed:
 
@@ -267,7 +272,7 @@ game/
 ### Statistics are read, not counted a second time
 
 `DotFpsStats` has counted jumps, perfect jumps, strafes and top speed on every
-controller since dot-fps-controller was written, and dot-timer counts runs and records.
+controller since dot-player-controller was written, and dot-timer counts runs and records.
 `G2GProgress` reads those out and files the **difference**; it measures exactly one
 thing itself, which is distance, because nothing else does.
 
@@ -429,7 +434,8 @@ work either way; where it is drawn is the half a game is supposed to decide.
 ```bash
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
-godot --headless --path . res://examples/headless_run.tscn   # 129 checks
+godot --headless --path . res://examples/headless_run.tscn   # 130 checks
+godot --headless --path . res://examples/headless_presentation.tscn  # 38 checks
 godot --headless --path . res://examples/headless_net.tscn   # 90 checks
 godot --headless --path . res://examples/dedicated.tscn      # 121 checks
 godot --headless --path . res://examples/jitter_probe.tscn   # 4 configurations
@@ -705,7 +711,7 @@ exercised this.
 
 ## Decision 11: a Source map is content, and it is read rather than rebuilt
 
-`tools/bsp_import.py` turns a Counter-Strike: Source `.bsp` into a map this game
+`tools/bsp_import.py` turns a Source-engine `.bsp` into a map this game
 loads: geometry, the textures the file carried inside itself, the lighting its
 compiler baked, its start line, its finish, its stages, its bonus tracks and the
 volumes that catch a player who fell off the ride. It was written against
@@ -745,6 +751,71 @@ would say so. `maps/zones/README.md` is the format.
 That directory is beside the repository and not beside the import for one reason:
 `tools/import_maps.sh --force` rewrites every manifest, so a hand-written zone kept in
 one would survive exactly until somebody re-imported the map it describes.
+
+**The solid is the brushes, and the drawn faces are only the ones that ended up
+visible.** The importer read the face lump and the map got `create_trimesh_collision()`
+over what came out of it, which sounds right — a surf map is static geometry and a
+trimesh is what a swept hull wants — and is a collider with most of itself missing.
+vbsp deletes every face nobody can see, a mapper paints the rest `nodraw`, and a surf
+ramp is routinely wrapped in `tools/toolsplayerclip`, which is invisible by definition
+and is the reason the ramp is smooth to ride. **Between 31% and 77% of the sides of a
+solid brush are not drawn**, over the eight maps in `inspirations/`. So the brush lumps
+are read now — `LUMP_BRUSHES`, `LUMP_BRUSHSIDES` and the leaf tree that says which model
+owns what — and each brush's half-spaces are solved into the convex hull the mapper
+drew. That is the same geometry the genre's own player movement traces against, and it
+is why it is **convex per brush and not one trimesh**: a concave shape is loose
+triangles and a sliding hull catches on every interior edge between them, which on a
+45-degree ramp at 3000 u/s is a run ended by a bump that is not there. Displacements
+are the exception, because terrain is not convex in any useful way; they stay triangles,
+welded across the map so the seams between them at least are shared.
+
+Two things decide what is solid, and the contents flags are only one of them: a
+`trigger_teleport`'s brushes carry `CONTENTS_SOLID` — 186 of them in `surf_beginner2`,
+and they are the pits — so `SOLID_BRUSH_ENTITIES` in `bsp_read.py` decides by classname,
+and a classname in neither list is left non-solid and **printed**, because the
+alternative to a note is an invisible wall nobody can explain.
+
+**What a surface is FOR comes from its slope, not from the name of its texture.** There
+was a list of regexes over material names here — `concretefloor039a` is a ramp,
+`nodraw` is a platform — on the reasoning that the name is the only intent a compiled
+.bsp still carries. It is not, and the regexes scored almost nothing: `surf_beginner2`
+came out 97% FLOOR, one grey mass with the ride invisible inside it. In this genre what
+a surface is for is exactly what its angle lets a player do with it, and that is a
+number in the plane lump. Face area by normal Z comes out in three clean bands on every
+map: ~30–43% at +1.0, ~46–55% at 0.0 and a distinct 1.6–8.5% between — the ride. The
+line between PLATFORM and RAMP is `G2GConfig.max_slope`, because a texture that says
+"you can stand here" where the movement says otherwise is a texture that lies.
+
+**A surface the .bsp carried no texture for gets the prototype set, not a flat
+colour.** Most of a surf map is built from textures that live in the game's own VPKs
+and were never inside the file — 97% of `surf_beginner2`'s triangles, 100% of
+`surf_year3000`'s — and those used to be painted one flat `G2GTextures.ROLE_COLOURS`
+tone each. They get `res://textures/prototype/` now, keyed by the role above, with UVs
+built from a **tangent frame in the face's own plane** rather than an axis projection:
+dropping the dominant axis is one line and stretches the grid by root two along exactly
+the direction a player is travelling on a 45-degree ramp, so the one surface whose
+texture is being read for speed is the one drawn at the wrong size. A frame in the
+plane has no stretch and falls out with one axis running down the slope, which is the
+line a surfer steers by. The mesh carries UVs in **64-unit squares** and the material
+scales by the tile's share of that, because how many squares are in a tile is a
+property of the image and which image is installed is not known until load.
+
+**`surf_kitsune` renders as black silhouettes with neon wireframes on them, and that is
+the map.** It is worth writing down because it looks exactly like a broken import and
+was checked twice. Its own textures came out of the pakfile correctly: `grids_grid_*`
+are 1024x1024 and mean 6 to 11 out of 255 — a black panel with one bright line on it —
+so the map is black because it was built black. Raising [member G2GBspMap.ambient]
+changes nothing there, which is the tell: ambient multiplies the albedo, and ten times
+nearly nothing is nearly nothing. `surf_mesa` through the same path is a lit rock
+canyon.
+
+`tools/collision_probe.gd` is how any of this is checked. It drops the player's hull on
+every upward-facing triangle in a map and counts what it goes through, with `--trimesh`
+to build the old collider from the same data for comparison — **32.8% → 1.1% on
+`surf_beginner2`, 16.4% → 0.0% on `surf_kitsune`, 26.9% → 0.0% on `surf_year3000`**, and
+what is left on the first is water. It is a tool and not an assertion because the answer
+is a percentage of one map rather than a pass. The suite's own check — one bot, one
+spawn, still standing three seconds later — passed on all eight maps the entire time.
 
 **A track with a start and no end is dropped, and said so.** `surf_summit`'s third
 bonus has a start zone, eight checkpoints and no finish anywhere in the map. Left in,
@@ -1081,7 +1152,7 @@ This is the whole design of `G2GEffects` and the reason it is not four lines.
 
 Everything in this game exists to make a run comparable with one somebody else set, on
 another server, at another tick rate: sub-tick zone crossings, a rate taken from
-`sv_tickrate` rather than an export, styles paired between dot-fps-controller and
+`sv_tickrate` rather than an export, styles paired between dot-player-controller and
 dot-timer by id. **An effect that quietly multiplies `max_speed` by 0.65 undoes all of
 it**, and the player has no way of knowing it happened.
 
@@ -1139,6 +1210,57 @@ have checked whether a suite asserts the difference.** A command relayed from th
 arrives as `Source.CHAT` and is refused here too; `DotChatRelayConfig.command_source` is
 the switch for an operator who wants their site admins to reach it.
 
+## The presentation layer, and the sentence every decision in it comes from
+
+`G2GPresentation` holds dot-settings, dot-audio, dot-fx and dot-console, and every choice
+in it is downstream of this project's own rule: **a player who came to run must not be
+stopped by anything added for a player who came to do something else.**
+
+- **Camera shake defaults to zero here and to one in every other game in the family.** A
+  surf ramp is a precision input at 20 m/s; shaking the camera for a landing is not
+  atmosphere, it is taking the run away. It is still a *setting*, because the same server
+  runs a deathmatch layer and somebody in it may want one.
+- **Full-screen flashes default to off**, same reason, same switch.
+- **The effect budget is 24**, which is small on purpose. A frame here is a tick and a tick
+  is 7.8 ms of somebody's time, and nothing drawn is allowed to cost one. That is safe
+  because an effect never changes the simulation — which is the property that makes the
+  whole addon shippable on a timer server.
+
+The one thing audio genuinely adds is **the landing**. A bunny-hop is a rhythm, and a
+rhythm you can only see is one you have to watch your feet for — so the landing is pitched
+by the speed you landed at, which is the cheapest speedometer there is. It is **watched
+rather than listened for**, for the reason game-hungario watches its own eating: a landing
+fires on the authority, which on a netted client is somewhere else, so a client that hooked
+a signal would be silent online and perfectly noisy offline.
+
+**The server's console is bridged in with a prefix here and unprefixed everywhere else.**
+The two consoles share names that mean opposite things — `!s3` on a client is a local
+navigation and on a server is a teleport that ends a run — and an unprefixed remote console
+is how somebody types something meant for their own client and loses the run they were
+three stages into.
+
+## A practice session taints every run in it
+
+`G2GParty` is the sharpest disagreement the five games have about one addon.
+
+A peer-to-peer host is a player's own machine, and it holds the tick rate, the zone
+crossings, the sub-tick fractions and the map — which between them **are** a time. A host
+who wanted to could file a world record by editing a number, and nothing on the receiving
+end could tell.
+
+So a run made in a peer-to-peer session is **tainted the moment it starts**, using
+`DotTimerRun.tainted` — the field dot-timer has had since it was written, whose first
+caller was this game's own effects layer, for the same sentence one level over: *a style
+you did not choose is a record you did not set*, and a host you cannot vouch for is that
+sentence about the machine instead of about the movement.
+
+**Tainted rather than refused, and at the start rather than at the end.** A run you cannot
+compare is still a run worth doing — practising a map with a friend on a machine neither of
+you pays for is exactly what peer-to-peer is good at — and a run tainted on *finishing* is
+one a player made believing it counted.
+
+Migration is off: a time made of two machines' clocks is worse than no time at all.
+
 ## Things deliberately not here
 
 - **A second transport.** The bridge speaks through `DotClientLink`'s RPCs on one
@@ -1161,26 +1283,31 @@ the switch for an operator who wants their site admins to reach it.
   and the bridge already sends a map change as a game event. Adding `DotMapSyncClient`
   on top would be a second thing loading the same map, which is two owners of one
   world.
-- **A texture set.** `G2GTextures` generates a prototype grid and looks for an
-  installed one in `res://textures/prototype/{floor,ramp,start,end,platform,bonus}.png`.
-  Dropping files in changes every map in the game with no code change, because
-  `G2GGeometry.box` takes a ROLE rather than a colour and the roles are the whole
-  interface.
+- **A texture set for the hand-built maps.** `G2GTextures` generates a prototype grid
+  and the hand-built maps draw in it. `res://textures/prototype/` holds an installed
+  set, and **the imported `.bsp` maps are the half that uses it** — see Decision 11.
 
-  **Kenney's prototype kit was tried here and is not it.** It was installed, rendered
-  and compared against the generated grid, and it is a downgrade — so the entry that
-  used to say it "is what those files are for" was optimistic and this is what was
-  measured instead. Two reasons, and both are about the pipeline rather than the art:
+  **Kenney's prototype kit is installed, and it draws the imported maps only.** That
+  split is the second measurement of it, and it went the other way from the first for
+  one half. The entry here used to say the kit was a downgrade, on two findings:
 
-  - **The tint is a MULTIPLY**, so the source has to be light. Kenney's *Dark* set is a
-    dark base with light lines, and a dark base multiplied by a role colour is very
-    nearly black.
-  - **The *Light* set is too low-contrast at this tiling.** The generated grid draws a
-    darker line every square and a lighter one every `SQUARES_PER_TILE`, which is what
-    makes a floor something you can judge distance and speed against at 3000 u/s. A
-    1024x1024 Kenney panel stretched over the same area reads as almost flat, and a
+  - **The tint is a MULTIPLY**, so the source has to be light, and Kenney's *Dark* set
+    is a dark base with light lines that multiplies to nearly black. **This one is
+    solved rather than lived with.** An installed set carries its own colour per role —
+    the vendored one spends a whole colour on each — so nothing tints it; the multiply
+    only ever applied to the greyscale grid, and `material_for` says so now.
+  - **The *Light* set is too low-contrast at this tiling**, and that finding stands. It
+    was re-rendered on `surf_g2g_intro` beside the generated grid and it is still worse:
+    a near-flat saturated panel whose white lines are gone by mid-distance, under six
+    brand colours rather than a palette — a mint floor beneath a magenta ramp. A
     movement game whose floor has no readable scale is harder to play, not prettier.
 
-  What would work is a light, high-contrast set whose line weight survives the tiling —
-  the generated grid is the specification for that, not a placeholder to be replaced by
-  the first CC0 kit to hand.
+  The two halves of the game are not the same pipeline, and that is why the answer
+  differs. A hand-built map is a sunlit `StandardMaterial3D` over a large plane, which is
+  what `grid_texture()` was designed against. An imported map is unshaded through the
+  lightmap its own compiler baked — which breaks a flat tile up for free — and, more to
+  the point, **its alternative is not the grid, it is no texture at all**: a flat role
+  colour over 97% of the map. Against that, the kit is not a close call.
+
+  What would still be better for the hand-built half is a light, high-contrast set whose
+  line weight survives the tiling. The generated grid is the specification for that.

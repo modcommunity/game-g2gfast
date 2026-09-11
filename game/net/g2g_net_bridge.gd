@@ -383,8 +383,8 @@ func note_attack(player: G2GPlayer, attack: bool) -> void:
 	if game == null or game.combat == null or player == null:
 		return
 
-	var command := DotCombatCommand.new()
-	command.set_button(DotCombatCommand.BUTTON_ATTACK, attack)
+	var command := DotWeaponCommand.new()
+	command.set_button(DotWeaponCommand.BUTTON_ATTACK, attack)
 	game.combat.set_fire_command(player.player_id, command)
 
 

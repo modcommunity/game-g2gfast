@@ -282,6 +282,28 @@ func _test_query_and_chat() -> void:
 	var map_command: DotConCommand = server.console.find_command("g2g_map")
 	_check(map_command != null and not map_command.chat_allowed, "and changing the map does not")
 
+	# dot-map owns the plain name now. dot-server's `map` changed the GAME, which on a
+	# timer server running one game and a hundred maps was the wrong operation every time
+	# it was typed.
+	var plain_map: DotConCommand = server.console.find_command("map")
+	_check(plain_map != null, "`map` is registered, and it is dot-map's")
+	_check(
+		not plain_map.chat_allowed,
+		"and carries the same policy as g2g_map: a map change destroys every run in progress"
+	)
+	var plain_maps: DotConCommand = server.console.find_command("maps")
+	_check(plain_maps != null and plain_maps.chat_allowed, "while listing them from chat is fine")
+	_check(
+		server.console.find_command("game") != null,
+		"and `game` is what changes the game, which is what dot-server's `map` used to do"
+	)
+	# dot-vote registers both of these over the same maps. Two commands of one name is the
+	# last one registered winning silently, which is why dot-map registers neither.
+	_check(
+		server.console.find_command("mapinfo") != null,
+		"`mapinfo` answers what nextmap and timeleft would, without taking dot-vote's names"
+	)
+
 
 # --- The rest of the server -------------------------------------------------
 
@@ -530,15 +552,35 @@ func _test_modes() -> void:
 			# happens on a tick and has to be replayed with the movement of that tick,
 			# and a trigger arriving reliably-and-separately would be replayed against
 			# a different tick's position every time.
-			var arsenal_before := game.combat._kit[&"u4242"]["arsenal"] as DotArsenal
+			var arsenal_before := game.combat._kit[&"u4242"]["arsenal"] as DotWeaponArsenal
 			_check(
 				arsenal_before.slots().size() >= 1,
 				"an armed player has something to shoot with",
 				"%d slots" % arsenal_before.slots().size()
 			)
 
-			var fire := DotCombatCommand.new()
-			fire.set_button(DotCombatCommand.BUTTON_ATTACK, true)
+			# [b]The trigger has to be released first, and that is not a workaround.[/b]
+			# The player spawns mid-switch — knife in hand, deagle coming up — and the
+			# deagle is semi-automatic. A semi-automatic weapon fires on the press, not
+			# on the button being down, so a trigger already held while the weapon was
+			# still deploying is not a press and must not fire: holding M1 through a
+			# weapon switch and having it go off the instant the gun arrives is the
+			# behaviour every shooter deliberately does not have.
+			#
+			# So: hold nothing until the switch has finished, then press.
+			var idle := DotWeaponCommand.new()
+			game.combat.set_fire_command(&"u4242", idle)
+
+			# [b]`tick_once`, not `combat.tick`.[/b] Every duration in dot-weapon is
+			# measured in ticks, so a loop that advances time without advancing
+			# `current_tick()` leaves the weapon switch frozen mid-deploy for ever —
+			# which is what this test used to do, and it got away with it only because
+			# the old arsenal measured its deploy differently.
+			for _deploy in range(game.tick_rate):
+				game.tick_once(game.current_tick() + 1)
+
+			var fire := DotWeaponCommand.new()
+			fire.set_button(DotWeaponCommand.BUTTON_ATTACK, true)
 			game.combat.set_fire_command(&"u4242", fire)
 
 			# [b]An Array, not an int.[/b] A GDScript lambda captures locals by
@@ -554,7 +596,7 @@ func _test_modes() -> void:
 			# Enough ticks for the deagle's 160 rpm to come round. A weapon that fired
 			# on the first tick would be a weapon with no rate of fire.
 			for _step in range(game.tick_rate):
-				game.combat.tick(1.0 / float(game.tick_rate))
+				game.tick_once(game.current_tick() + 1)
 
 			_check(
 				shots.size() > 0,

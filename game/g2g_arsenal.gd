@@ -78,57 +78,105 @@ static func damage_types() -> Array[DotDamageType]:
 
 # --- Weapons ---------------------------------------------------------------
 
+## The tick rate the weapon timings are quoted at.
+##
+## Every duration on a [DotWeaponDef] is in ticks, because a weapon measured in seconds
+## fires at two different rates on a 64 Hz server and a 128 Hz one. This server runs at
+## 128; the conversions below are done once, here.
+const TICK_RATE := 128
+
+const HITSCAN := "res://addons/dot_weapon/behaviour/dot_weapon_hitscan.gd"
+
+
+static func rpm_ticks(rpm: float) -> int:
+	return maxi(1, int(round(60.0 / rpm * float(TICK_RATE))))
+
+
+static func sec_ticks(seconds: float) -> int:
+	return maxi(0, int(round(seconds * float(TICK_RATE))))
+
+
 ## One shot, one kill on a headshot and two on a body. Slow enough to miss with.
 ##
 ## [b]No magazine and no reload, deliberately.[/b] Reloading takes a hand off the
 ## strafe keys, and every second a player spends not strafing on a surf map is a second
 ## they spend falling. The rate of fire is the cost instead.
-static func deagle() -> DotWeapon:
-	var weapon := DotWeapon.make(ITEM_DEAGLE, 62.0)
-	weapon.display_name = "Deagle"
-	weapon.slot = 2
-	weapon.fire_mode = DotWeapon.Fire.SEMI
-	weapon.rpm = 160.0
-	weapon.magazine = 0
-	weapon.infinite_reserve = true
+static func deagle() -> DotWeaponDef:
+	var def := DotWeaponDef.new()
+	def.id = ITEM_DEAGLE
+	def.display_name = "Deagle"
+	def.behaviour_path = HITSCAN
+	def.slot = 2
+	def.fire_mode = DotWeaponDef.Fire.SEMI
+	def.use_interval_ticks = rpm_ticks(160.0)
+	def.magazine = 0
+	def.infinite_reserve = true
+	def.cost_per_use = 0
+	def.deploy_ticks = sec_ticks(0.25)
+	def.holster_ticks = sec_ticks(0.2)
+
+	var b := DotWeaponBallistics.new()
+	b.damage = 62.0
+	b.damage_type = bullet()
 	# Wide when moving and tight when still, which on a movement server is the whole
 	# trade: the fastest player on the map is the hardest to hit and the worst shot.
-	weapon.spread_degrees = 0.25
-	weapon.spread_moving = 5.5
-	weapon.spread_airborne = 8.0
-	weapon.spread_crouched = 0.15
-	weapon.spread_bloom = 1.2
-	weapon.spread_bloom_max = 6.0
-	weapon.spread_recovery = 6.0
-	weapon.recoil_pitch = 2.4
-	weapon.max_range = 400.0
-	weapon.deploy_sec = 0.25
-	weapon.holster_sec = 0.2
-	weapon.damage_type = bullet()
-	return weapon
+	b.spread = 0.25
+	b.spread_moving = 5.5
+	b.spread_airborne = 8.0
+	b.spread_crouched = 0.15
+	b.bloom = 1.2
+	b.bloom_max = 6.0
+	b.bloom_recovery = 6.0 / float(TICK_RATE)
+	b.recoil_pitch = 2.4
+	b.max_range = 400.0
+	def.tuning = b
+	return def
 
 
 ## Instant, and only if you got there.
-static func knife() -> DotWeapon:
-	var weapon := DotWeapon.make(ITEM_KNIFE, 120.0)
-	weapon.display_name = "Knife"
-	weapon.slot = 1
-	weapon.fire_mode = DotWeapon.Fire.SEMI
-	weapon.rpm = 90.0
-	weapon.magazine = 0
-	weapon.infinite_reserve = true
-	weapon.spread_degrees = 0.0
+##
+## [b]Hitscan rather than [DotWeaponMelee], deliberately.[/b] dot-weapon ships a melee
+## behaviour that sweeps an arc, and a knife is the obvious thing to point at it. This
+## one stays a single ray because that is what it has always been here and a knife that
+## suddenly sweeps forty degrees is a balance change wearing a refactor's clothes. The
+## arc is one field away when somebody wants to make that change on purpose.
+static func knife() -> DotWeaponDef:
+	var def := DotWeaponDef.new()
+	def.id = ITEM_KNIFE
+	def.display_name = "Knife"
+	def.behaviour_path = HITSCAN
+	def.slot = 1
+	def.fire_mode = DotWeaponDef.Fire.SEMI
+	def.use_interval_ticks = rpm_ticks(90.0)
+	def.magazine = 0
+	def.infinite_reserve = true
+	def.cost_per_use = 0
+	def.deploy_ticks = sec_ticks(0.15)
+	def.holster_ticks = sec_ticks(0.1)
+
+	var b := DotWeaponBallistics.new()
+	b.damage = 120.0
+	b.damage_type = blade()
+	b.spread = 0.0
+	b.spread_moving = 0.0
+	b.spread_airborne = 0.0
 	# Two metres. A knife that reaches further than an arm is a hitscan weapon with a
 	# short range, which is a different and much worse thing to fight.
-	weapon.max_range = 2.0
-	weapon.deploy_sec = 0.15
-	weapon.holster_sec = 0.1
-	weapon.damage_type = blade()
-	return weapon
+	b.max_range = 2.0
+	def.tuning = b
+	return def
 
 
-static func weapons() -> Array[DotWeapon]:
+static func weapons() -> Array[DotWeaponDef]:
 	return [knife(), deagle()]
+
+
+## The whole weapon table, checkable at boot on a server with no content mounted.
+static func weapon_catalogue() -> DotWeaponCatalogue:
+	var catalogue := DotWeaponCatalogue.new()
+	for def in weapons():
+		catalogue.add(def)
+	return catalogue
 
 
 static func weapon_table() -> Dictionary:

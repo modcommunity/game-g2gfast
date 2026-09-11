@@ -6,7 +6,7 @@ extends Node
 ## [b]A movement effect is a style, and a style you did not choose is a record you did
 ## not set.[/b] Everything else in this game exists to make a run comparable with a run
 ## somebody else set on another server at another tick rate — sub-tick zone crossings,
-## a tick rate taken from `sv_tickrate`, styles paired between dot-fps-controller and
+## a tick rate taken from `sv_tickrate`, styles paired between dot-player-controller and
 ## dot-timer by id. An effect that quietly multiplies `max_speed` by 1.35 undoes all of
 ## it, and the player would have no way of knowing it had happened.
 ##

@@ -16,7 +16,7 @@ extends DotNetInput
 ## position every time. It is one bit; the aim it is fired along is already here, in
 ## the movement command's own yaw and pitch.
 ##
-## [b]It is a bit and not a [DotCombatCommand].[/b] dot-combat's command carries a slot
+## [b]It is a bit and not a [DotWeaponCommand].[/b] dot-combat's command carries a slot
 ## request, a reload, an alternate fire and a zoom, and this game has two weapons with
 ## no magazine between them — so all but one of those fields would be a field nothing
 ## reads, quantised and sent sixty-four times a second per player. `G2GCombat` builds

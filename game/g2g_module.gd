@@ -110,6 +110,27 @@ func _module_load() -> DotResult:
 	add_command(
 		"g2g_map", _cmd_map, "Change map, or list them", DotAdminFlags.CHANGEMAP
 	)
+
+	# `map`, `maps` and `mapinfo` come from dot-map itself. dot-server's `map` changed the
+	# GAME and is `changelevel`, `game` and `gamechange` now -- on a timer server running
+	# one game and every surf map in circulation, the plain name meant the wrong operation
+	# every time it was typed.
+	#
+	# `allow_chat_change` stays OFF, which is the default and is the same policy the
+	# paragraph above puts on `g2g_map`: a map change destroys every run in progress, and a
+	# records server does not let a player do that by typing.
+	#
+	# `change_fn` rather than the session, because `G2GGame.change_map` is what resets the
+	# timer, the zones and the styles -- handing the session straight to the command would
+	# swap the world out from under all three, which is a live run pointed at a map that is
+	# no longer there.
+	var map_commands := DotMapCommands.new()
+	map_commands.session = game.maps
+	map_commands.change_fn = func(id: StringName) -> DotResult:
+		return await game.change_map(id)
+	map_commands.player_count_fn = func() -> int:
+		return game.players.size() if game != null else 0
+	map_commands.bind(self)
 	add_command("g2g_maps_reload", _cmd_maps_reload,
 		"Re-read maps/ from disk, picking up anything dropped in", DotAdminFlags.CHANGEMAP)
 	add_command("g2g_rtv", _cmd_rtv, "Rock the vote", "").with_chat()

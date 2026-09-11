@@ -46,6 +46,64 @@ LUMP_PLANES = 1
 LUMP_TEXINFO, LUMP_FACES, LUMP_EDGES, LUMP_SURFEDGES = 6, 7, 12, 13
 LUMP_MODELS, LUMP_DISPINFO, LUMP_DISP_VERTS = 14, 26, 33
 LUMP_TEXDATA_STRING_DATA, LUMP_TEXDATA_STRING_TABLE = 43, 44
+LUMP_NODES, LUMP_LEAFS, LUMP_LEAFBRUSHES = 5, 10, 17
+LUMP_BRUSHES, LUMP_BRUSHSIDES = 18, 19
+
+# What a player collides with, which is not what a player can see.
+#
+# [b]A Source map's solid volume is its brushes, and its drawn faces are only the
+# ones that happened to end up visible.[/b] vbsp deletes every face it can prove
+# nobody can look at, and a mapper paints the rest with `nodraw` on purpose; on top
+# of that a surf map's ride is routinely wrapped in `tools/toolsplayerclip`, which
+# is invisible by definition and is the whole reason a ramp is smooth to ride.
+# Measured over the eight maps in `inspirations/`, between 31% and 77% of the sides
+# of a solid brush are not drawn -- so collision built from the drawn faces is a
+# shell with most of itself missing, which is a player falling through a ramp.
+#
+# These are Source's own values and the mask is its MASK_PLAYERSOLID. GRATE and
+# WINDOW are in it because a player cannot walk through a grille or a pane; WATER,
+# AREAPORTAL and the MONSTERCLIP that is not also PLAYERCLIP are not, because a
+# player walks through all three.
+CONTENTS_SOLID, CONTENTS_WINDOW, CONTENTS_GRATE = 0x1, 0x2, 0x8
+CONTENTS_MOVEABLE, CONTENTS_PLAYERCLIP = 0x4000, 0x10000
+CONTENTS_MONSTER, CONTENTS_LADDER = 0x2000000, 0x20000000
+MASK_PLAYERSOLID = (CONTENTS_SOLID | CONTENTS_WINDOW | CONTENTS_GRATE
+                    | CONTENTS_MOVEABLE | CONTENTS_PLAYERCLIP | CONTENTS_MONSTER)
+
+# Which brush entities are solid, by classname, because their contents cannot say.
+#
+# [b]A `trigger_teleport`'s brushes carry CONTENTS_SOLID.[/b] 186 of them do in
+# surf_beginner2 and 126 in Surf_Mesa -- the pits, which is the one volume in a surf
+# map that must not be solid -- and so do `func_illusionary` and `func_dustcloud`.
+# Source never asks the contents alone: it asks the entity what it is. So does this.
+# An entity whose classname is in neither list is skipped and said out loud, because
+# the alternative to a note is a map with an invisible wall nobody can explain.
+SOLID_BRUSH_ENTITIES = frozenset("""
+    func_brush func_wall func_wall_toggle func_detail func_breakable
+    func_breakable_surf func_button func_rot_button func_door func_door_rotating
+    func_movelinear func_water_analog func_conveyor func_train func_tracktrain
+    func_tanktrain func_rotating func_platrot func_plat func_lod func_physbox
+    func_physbox_multiplayer func_pushable func_monitor func_reflective_glass
+    func_clip_vphysics
+""".split())
+
+NONSOLID_BRUSH_ENTITIES = frozenset("""
+    func_illusionary func_dustcloud func_dustmotes func_smokevolume
+    func_precipitation func_areaportal func_areaportalwindow func_occluder
+    func_viscluster func_ladder func_bomb_target func_buyzone func_hostage_rescue
+    func_nav_blocker func_instance_io_proxy func_fish_pool func_vehicleclip
+    trigger_vphysics_motion env_bubbles env_wind func_wall_illusionary
+""".split())
+
+# dnode_t and dleaf_t, both 32 bytes in VBSP v20. Every map in `inspirations/` is v20
+# and the leaf lump divides by 32 exactly in all eight; v19 carried a
+# `CompressedLightCube` inline and measured 56, which is why `model_brushes` checks
+# rather than assuming.
+FMT_NODE = "<i2i6h2Hh2x"        # planenum, children[2], mins[3], maxs[3], face range, area
+FMT_LEAF = "<ihh6h4Hh2x"        # contents, cluster, area/flags, mins/maxs, face and brush ranges
+FMT_LEAF_V19 = "<ihh6h4Hh24x"   # the same, with the lightcube v20 moved to its own lump
+FMT_BRUSH = "<3i"               # firstside, numsides, contents
+FMT_BRUSHSIDE = "<H3h"          # planenum, texinfo, dispinfo, bevel
 
 # dmodel_t is 48 bytes: mins, maxs, origin, headnode, firstface, numfaces.
 # Reading it as 9f4i (52) still yields a correct model 0 -- it is the first record
@@ -100,6 +158,19 @@ class Bsp:
         data = self._lump(LUMP_TEXDATA_STRING_DATA)
         self.texnames = [data[o:data.index(b"\0", o)].decode("ascii", "replace") for o in table]
         self.entities = parse_entities(self._lump(LUMP_ENTITIES).decode("ascii", "replace"))
+        self.brushes = self._array(LUMP_BRUSHES, FMT_BRUSH)
+        self.brushsides = self._array(LUMP_BRUSHSIDES, FMT_BRUSHSIDE)
+        self.leafbrushes = [x[0] for x in self._array(LUMP_LEAFBRUSHES, "<H")]
+        self.nodes = self._array(LUMP_NODES, FMT_NODE)
+        # v20 leafs are 32 bytes, v19's are 56. Dividing exactly by the wrong one is
+        # the failure this file has already paid for once with dmodel_t: every field
+        # before the overrun is right, so the first record parses and every record
+        # after it is garbage. Pick the size the lump actually divides by.
+        raw = len(self._lump(LUMP_LEAFS))
+        fmt = FMT_LEAF if raw % struct.calcsize(FMT_LEAF) == 0 else FMT_LEAF_V19
+        if raw % struct.calcsize(fmt):
+            raise ValueError("leaf lump of %d bytes is neither v19 nor v20 shaped" % raw)
+        self.leafs = self._array(LUMP_LEAFS, fmt)
         return self
 
     # -- faces -----------------------------------------------------------
@@ -128,6 +199,97 @@ class Bsp:
     def model_bounds(self, model):
         m = self.models[model]
         return (m[0], m[1], m[2]), (m[3], m[4], m[5])
+
+    # -- brushes: the solid volume, as opposed to the visible surface -----
+    def model_brushes(self, model=0):
+        """Every brush index belonging to one model, by walking its BSP tree.
+
+        [b]There is no per-model brush range to slice.[/b] `dmodel_t` carries a
+        headnode and nothing else about brushes; a brush belongs to a model because
+        some leaf under that model's node reaches it through the leafbrush table. So
+        the tree is walked. Model 0 is the world -- including every `func_detail`,
+        which vbsp merged into it -- and models 1..n are one brush entity each.
+        """
+        out, stack, seen = set(), [self.models[model][9]], set()
+        while stack:
+            n = stack.pop()
+            if n < 0:
+                i = -1 - n
+                if 0 <= i < len(self.leafs):
+                    leaf = self.leafs[i]
+                    first, count = leaf[11], leaf[12]
+                    out.update(self.leafbrushes[first:first + count])
+                continue
+            if n >= len(self.nodes) or n in seen:
+                continue
+            seen.add(n)
+            stack.extend(self.nodes[n][1:3])
+        return out
+
+    def brush_hull(self, index, epsilon=0.1):
+        """One brush as the corner points of its convex hull, in Hammer coordinates.
+
+        A Source brush is stored the way it was authored: as the intersection of the
+        half-spaces its sides lie on, with no vertices anywhere. The corners are the
+        points where three of those planes meet that no fourth plane excludes, which
+        is what this solves -- Cramer's rule over every triple of sides, kept when it
+        is inside all the rest.
+
+        [b]Bevel sides are skipped, and must be.[/b] vbsp adds axis-aligned bevel
+        planes so that its own AABB sweep has something to test; they are tangent to
+        the hull and change none of its corners, and there can be more of them than
+        real sides -- Surf_Mesa averages 16.5 sides a brush against roughly 6 real
+        ones. Feeding them in costs the cube of that for nothing.
+
+        `epsilon` is Source's own plane tolerance. The planes are float32 and the
+        coordinates reach +/-16384, so an exact test drops corners that are on the
+        hull by construction, and a hull missing a corner is a solid with a bite out
+        of it that a player at 3000 u/s will find.
+        """
+        first, count, _ = self.brushes[index]
+        planes = []
+        for s in self.brushsides[first:first + count]:
+            if s[3]:                                    # bevel
+                continue
+            pl = self.planes[s[0]]
+            planes.append((pl[0], pl[1], pl[2], pl[3]))
+        n = len(planes)
+        if n < 4:
+            return []
+        pts = []
+        for i in range(n - 2):
+            a = planes[i]
+            for j in range(i + 1, n - 1):
+                b = planes[j]
+                # a x b, reused across the whole inner loop.
+                cx = a[1] * b[2] - a[2] * b[1]
+                cy = a[2] * b[0] - a[0] * b[2]
+                cz = a[0] * b[1] - a[1] * b[0]
+                for k in range(j + 1, n):
+                    c = planes[k]
+                    det = c[0] * cx + c[1] * cy + c[2] * cz
+                    if -1e-6 < det < 1e-6:              # the three planes share a line
+                        continue
+                    # Cramer's rule, with the two remaining cross products inline.
+                    bx = b[1] * c[2] - b[2] * c[1]
+                    by = b[2] * c[0] - b[0] * c[2]
+                    bz = b[0] * c[1] - b[1] * c[0]
+                    ax = c[1] * a[2] - c[2] * a[1]
+                    ay = c[2] * a[0] - c[0] * a[2]
+                    az = c[0] * a[1] - c[1] * a[0]
+                    x = (a[3] * bx + b[3] * ax + c[3] * cx) / det
+                    y = (a[3] * by + b[3] * ay + c[3] * cy) / det
+                    z = (a[3] * bz + b[3] * az + c[3] * cz) / det
+                    for p in planes:
+                        if p[0] * x + p[1] * y + p[2] * z - p[3] > epsilon:
+                            break
+                    else:
+                        pts.append((round(x, 3), round(y, 3), round(z, 3)))
+        # Three planes meeting at one corner produce it once per triple, and a corner
+        # where four meet -- every bevelled edge, every wedge tip -- comes out six
+        # times. Godot builds its own hull from these, so duplicates are only waste,
+        # but a surf map has 2500 brushes and the waste is measured in megabytes.
+        return list(dict.fromkeys(pts))
 
     # -- displacements ---------------------------------------------------
     def displacement_tris(self, f):
@@ -202,7 +364,7 @@ def decompress_lump(raw):
 
 
 def yaw_to_godot(yaw):
-    """A Source yaw as the yaw dot-fps-controller builds a forward vector from.
+    """A Source yaw as the yaw dot-player-controller builds a forward vector from.
 
     Source measures yaw anticlockwise about +Z from +X; [method DotFpsMotor.forward]
     is [code](-sin y, 0, -cos y)[/code], and the axis swap has already turned Source's

@@ -6,7 +6,7 @@ extends G2GMap
 ## limit is a normal of 0.7, about 45.6° — and this one is 60°. The player drops off
 ## the start platform onto a face too steep to stand on, slides under gravity, and
 ## strafes to keep and gain speed. The seam between the two ramps is the geometry
-## dot-fps-controller's crease resolution exists for.
+## dot-player-controller's crease resolution exists for.
 ##
 ## Everything in genre units. The valley falls 3072 units over 8192.
 

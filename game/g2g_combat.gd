@@ -150,18 +150,31 @@ func _build_match() -> DotResult:
 
 
 ## The two weapons everybody starts with.
-static func _give_default(arsenal: DotArsenal) -> void:
+static func _give_default(arsenal: DotWeaponArsenal) -> void:
 	arsenal.clear()
-	arsenal.give(G2GArsenal.knife(), 1)
-	arsenal.give(G2GArsenal.deagle(), 2)
+	arsenal.give(G2GArsenal.ITEM_KNIFE)
+	arsenal.give(G2GArsenal.ITEM_DEAGLE)
+
+
+## The shared weapon table, built and validated once for the whole process.
+static var _shared_catalogue: DotWeaponCatalogue = null
+
+
+static func catalogue() -> DotWeaponCatalogue:
+	if _shared_catalogue == null:
+		_shared_catalogue = G2GArsenal.weapon_catalogue()
+		var res := _shared_catalogue.validate()
+		if not res.ok:
+			push_error(res.error.message)
+	return _shared_catalogue
 
 
 ## Gives a player the weapons their saved loadout names.
 ##
 ## [b]This is the entire dot-loadout seam, and without it the manager was a manager of
-## nothing.[/b] dot-loadout has never heard of a `DotWeapon` and dot-combat has never
-## heard of a `DotItem`; `G2GArsenal.weapon_table()` is the table from one to the other
-## and this loop is the whole of the join. The manager was built, configured with a
+## nothing.[/b] dot-loadout has never heard of a weapon and dot-weapon has never heard
+## of a `DotItem`; the catalogue's ids and the item ids are the same strings here, and
+## this loop is the whole of the join. The manager was built, configured with a
 ## schema and a store, and asked for nothing until the family's own detector found
 ## `weapon_table()` occurring once.
 ##
@@ -172,7 +185,7 @@ func _apply_loadout(player_id: StringName) -> void:
 	if kit.is_empty():
 		return
 
-	var arsenal: DotArsenal = kit["arsenal"]
+	var arsenal: DotWeaponArsenal = kit["arsenal"]
 	var res: DotResult = await loadouts.active_for(_loadout_key(player_id))
 
 	if not res.ok:
@@ -181,7 +194,6 @@ func _apply_loadout(player_id: StringName) -> void:
 		})
 		return
 
-	var table := G2GArsenal.weapon_table()
 	var entries := loadouts.resolve(res.value)
 
 	if entries.is_empty():
@@ -193,13 +205,14 @@ func _apply_loadout(player_id: StringName) -> void:
 
 	for entry in entries:
 		var item: DotItem = entry["item"]
-		var weapon: DotWeapon = table.get(item.id)
 
-		if weapon == null:
+		if not arsenal.catalogue.has(item.id):
 			continue
 
-		var slot := int(entry["arsenal_slot"])
-		arsenal.give(weapon, slot)
+		if not arsenal.give(item.id).ok:
+			continue
+
+		var slot := arsenal.catalogue.get_def(item.id).slot
 
 		if lowest == 0 or slot > lowest:
 			lowest = slot
@@ -310,12 +323,17 @@ func _arm(player: G2GPlayer) -> void:
 	player.add_child(hitboxes)
 	hitboxes.refresh()
 
-	var arsenal := PlayerArsenal.new()
-	arsenal.owner_id = entity
+	var arsenal := DotWeaponArsenal.new()
 	arsenal.name = "Arsenal"
 	arsenal.tick_rate = game.tick_rate
 	arsenal.max_slots = 2
+	arsenal.authority = game.authoritative
+	arsenal.catalogue = catalogue()
 	player.add_child(arsenal)
+
+	var armed := arsenal.setup()
+	if not armed.ok:
+		push_error(armed.error.message)
 
 	hitboxes.register_with(manager, entity)
 	manager.register_health(entity, health)
@@ -412,23 +430,13 @@ func tick(delta: float) -> void:
 		if player == null or not health.alive:
 			continue
 
-		var arsenal: DotArsenal = kit["arsenal"]
+		var arsenal: DotWeaponArsenal = kit["arsenal"]
 		var state := player.controller.state
-
-		# Pushed in from the simulated state, never read out of a rendered one: an
-		# interpolated position differs between client and server by design, and
-		# feeding it to the spread makes the spread differ too.
-		arsenal.movement = clampf(
-			state.horizontal_speed() / maxf(0.001, player.controller.tunables.max_speed),
-			0.0, 1.0
-		)
-		arsenal.airborne = not state.is_grounded()
-		arsenal.crouched = state.is_crouched()
 
 		health.tick(game.current_tick(), delta)
 		manager.set_authoritative_origin(int(kit["entity"]), player.eye_position())
 
-		var command: DotCombatCommand = player.get_meta("g2g_fire", null)
+		var command: DotWeaponCommand = player.get_meta("g2g_fire", null)
 
 		if command == null:
 			continue
@@ -436,9 +444,25 @@ func tick(delta: float) -> void:
 		command.yaw = state.yaw
 		command.pitch = state.pitch
 
-		shots.append_array(
-			arsenal.simulate_tick(game.current_tick(), delta, command)
+		# Pushed in from the simulated state, never read out of a rendered one: an
+		# interpolated position differs between client and server by design, and
+		# feeding it to the spread makes the spread differ too.
+		var ctx := DotWeaponContext.make(
+			int(kit["entity"]),
+			game.current_tick(),
+			player.eye_position(),
+			command.aim_direction()
 		)
+		ctx.speed = state.horizontal_speed()
+		ctx.airborne = not state.is_grounded()
+		ctx.crouched = state.is_crouched()
+		ctx.authority = game.authoritative
+
+		var previous: DotWeaponCommand = player.get_meta("g2g_fire_previous", null)
+		var outcome := arsenal.simulate_tick(command, ctx, previous)
+		player.set_meta("g2g_fire_previous", command.duplicate_command())
+
+		shots.append_array(outcome.shots)
 
 	if game.authoritative:
 		for shot in shots:
@@ -453,7 +477,7 @@ func tick(delta: float) -> void:
 ## command, or a test. Held as metadata rather than as a field on [G2GPlayer] because
 ## a player on a server with no deathmatch has no weapon and should carry no state
 ## about one.
-func set_fire_command(player_id: StringName, command: DotCombatCommand) -> void:
+func set_fire_command(player_id: StringName, command: DotWeaponCommand) -> void:
 	var player: G2GPlayer = game.players.get(player_id)
 
 	if player != null:
@@ -472,7 +496,7 @@ func _on_entity_killed(entity_id: int, damage: DotDamage) -> void:
 
 	(kit["health"] as DotHealth).alive = false
 	(kit["hitboxes"] as DotHitboxSet).enabled = false
-	(kit["arsenal"] as DotArsenal).disabled = true
+	(kit["arsenal"] as DotWeaponArsenal).disabled = true
 
 	# An attacker of 0 is world damage, and dot-match reads an empty killer key as
 	# exactly that. Passing "0" would create a scoreboard record for a player who does
@@ -515,7 +539,7 @@ func _on_respawn_due(key: String, spawn: DotSpawnPoint, tick: int) -> void:
 		return
 
 	(kit["hitboxes"] as DotHitboxSet).enabled = true
-	(kit["arsenal"] as DotArsenal).disabled = false
+	(kit["arsenal"] as DotWeaponArsenal).disabled = false
 
 	var health: DotHealth = kit["health"]
 	health.spawn_protection_ticks = match_node.spawn_protection_ticks()
@@ -572,17 +596,6 @@ func _kit_for_entity(entity_id: int) -> Dictionary:
 func _player_for(entity_id: int) -> G2GPlayer:
 	var id := player_id_for(entity_id)
 	return game.players.get(id) if id != &"" else null
-
-
-## An arsenal whose shots are attributed to the player rather than to a node.
-##
-## `DotArsenal.attacker_id()` defaults to its parent's instance id, which is a third id
-## space nobody else here uses. Overriding it is the documented seam.
-class PlayerArsenal extends DotArsenal:
-	var owner_id: int = 0
-
-	func attacker_id() -> int:
-		return owner_id
 
 
 func health_of(player_id: StringName) -> DotHealth:

@@ -34,6 +34,10 @@ var servers: G2GBrowser = null
 ## microphone in a single-player run.
 var extras: G2GClientExtras = null
 
+## Settings, audio, effects and the console. Everything that belongs to the person at the
+## keyboard rather than to the run.
+var presentation: G2GPresentation = null
+
 ## Play alone even when a link is available. `--offline`.
 @export var force_offline: bool = false
 
@@ -82,6 +86,12 @@ func _ready() -> void:
 	# Connected before anything can create a player. `JOIN` is what creates the local
 	# one and it arrives after `HELLO` has already said who we are — see [method _watch].
 	game.player_added.connect(_on_player_added)
+
+	presentation = G2GPresentation.new()
+	presentation.name = "Presentation"
+	presentation.client = self
+	add_child(presentation)
+	DotLog.result("g2g.client", "the presentation layer", presentation.setup())
 
 	if _offline:
 		for _i in range(60):
@@ -319,6 +329,34 @@ func _process(delta: float) -> void:
 
 	_drive_spectator_camera()
 
+	if presentation != null:
+		var camera: Camera3D = player.camera.active() \
+			if player != null and player.camera != null else null
+		var eye := camera.global_position if camera != null else Vector3.ZERO
+		var forward := -camera.global_transform.basis.z if camera != null else Vector3.FORWARD
+		presentation.present(delta, eye, forward)
+
+		# Watched rather than listened for. A landing fires on the authority, which on a
+		# netted client is somewhere else -- so a client that hooked a signal would be
+		# silent online and perfectly noisy offline, which is the kind of difference
+		# nothing catches. What a player perceives is their own feet touching the ground.
+		if player != null and player.controller != null:
+			var st := player.controller.state
+			# `is_grounded()`, not `grounded`: [DotFpsState] has no such property and
+			# never did. This threw once a frame, so `watch_movement` never ran and the
+			# client had no landing effect and no footsteps at all -- in a `_process`,
+			# where a script error aborts the call and the game keeps running.
+			presentation.watch_movement(
+				st.is_grounded(), Vector2(st.velocity.x, st.velocity.z).length(),
+				st.position
+			)
+
+		if camera != null:
+			# Zero by default on this game, which is the whole point: a shaken camera on
+			# a surf ramp is a lost run. Applied here rather than written by the shake so
+			# there is one thing that moves a camera.
+			camera.position = presentation.camera_shake()
+
 
 ## Where a spectator looks.
 ##
@@ -376,6 +414,14 @@ func mouse_drives_view() -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# [b]The console first.[/b] This client reads bare letters -- F5, Tab, R, C, V, M --
+	# so without this, typing at the console reloads the map, opens the scoreboard and
+	# changes style at the same time. It is the line every game that ships a console
+	# forgets, and this project already lost a whole keyboard once to a guard in the
+	# wrong place.
+	if presentation != null and presentation.swallows_input():
+		return
+
 	# [b]Before the `player == null` guard, deliberately.[/b] A browser player clicks
 	# while the world is still loading more often than not, and a click swallowed
 	# because no player exists yet is a click that never captures the cursor — after

@@ -22,18 +22,32 @@ extends RefCounted
 ## rule is that only dot-core is ever a hard dependency, and these two games' texturing
 ## has already diverged — this one is keyed by role and looks for an external set.
 
-## Where a real texture set is looked for, if one has been installed.
+## Where a real texture set is looked for. Kenney's prototype kit is vendored there.
 ##
-## [b]The Kenney prototype kit is what this is for.[/b] It is CC0, which is strictly
-## more permissive than the MIT this repository ships under, and its prototype textures
-## are the same thing surf and bhop maps have been built in for twenty years. Drop the
-## PNGs in at the names in [constant ROLE_FILES] and every map in the game picks them
-## up with no change to any map file — the roles below are the whole interface.
+## [b]An installed set draws the IMPORTED maps, and the hand-built ones keep the
+## generated grid.[/b] That split is measured, not a preference, and both halves of it
+## were rendered and looked at:
 ##
-## Nothing is vendored here and nothing fails without it: a missing directory falls
-## back to the generated grid, which is a legitimate look rather than an error state.
-## `dot-server-deploy/setup.sh` copies this directory into its own build, so
-## anything put here ships in the browser export as well.
+## - An imported `.bsp` map had no texture at all for most of its surface — the
+##   textures a Source map is built from live in that game's own VPKs and were never
+##   inside the file, so 97% of surf_beginner2 was painted one flat role colour. Any
+##   grid is an enormous improvement on a flat colour, and the Kenney set in particular
+##   reads well there: those maps are drawn unshaded through their own baked lightmap,
+##   which breaks the flat tile up for free.
+## - A hand-built map is the other way round. It is lit by a real sun through a
+##   [StandardMaterial3D], its ground is one large plane, and [method grid_texture]
+##   was designed for exactly that: a line every square, a lighter one every tile and a
+##   checker underneath, so a floor carries scale at 3000 u/s. Rendered side by side on
+##   `surf_g2g_intro`, Kenney's panel is a near-flat saturated colour whose white lines
+##   are gone by mid-distance, and its six colours are brand colours rather than a
+##   palette — a mint floor under a magenta ramp. It is a downgrade and this project
+##   had already written that down once.
+##
+## So the rule is one line: [method material_for], which is what a hand-built map calls,
+## always draws the generated grid; [method installed_texture], which is what
+## [G2GBspMap] calls, prefers what is in here. A missing directory is not an error state
+## — everything falls back to the grid. `dot-server-deploy/setup.sh` copies `textures/`
+## into its own build, so what is here ships in the browser export as well.
 const TEXTURE_DIR := "res://textures/prototype"
 
 ## What each surface in a map is FOR, which is what decides how it is textured.
@@ -89,6 +103,16 @@ const UNITS_PER_SQUARE := 64.0
 ## same density; four keeps it to 512 px, which is nothing on any target here.
 const SQUARES_PER_TILE := 4
 
+## How many squares are in one tile of an INSTALLED set.
+##
+## [b]Not the same number, and it has to not be.[/b] The vendored Kenney tile is eight
+## squares across where the generated one is four, so scaling both by
+## [constant SQUARES_PER_TILE] would draw the installed set at half the size in the
+## world — and the size of a square in the world is the only cue a player has for how
+## fast the ground is going past them. Installing a texture set is allowed to change
+## what the map looks like and is not allowed to change what it reads as.
+const INSTALLED_SQUARES_PER_TILE := 8
+
 ## Pixels per square in the generated tile.
 const PIXELS_PER_SQUARE := 128
 
@@ -108,7 +132,10 @@ static func material_for(role: Role) -> StandardMaterial3D:
 		return _materials[role]
 
 	var material := StandardMaterial3D.new()
-	material.albedo_texture = _texture_for(role)
+	# The generated grid, and not an installed set. See TEXTURE_DIR for the measurement
+	# that says so; the short version is that this path tints, an installed set brings
+	# its own colour, and the two cannot both be true of one image.
+	material.albedo_texture = grid_texture()
 	material.albedo_color = ROLE_COLOURS.get(role, Color.WHITE)
 
 	# World-space triplanar. `uv1_world_triplanar` is what makes the scale below a
@@ -137,8 +164,12 @@ static func material_for(role: Role) -> StandardMaterial3D:
 	return material
 
 
-## The texture a role draws with: an installed one, or the generated grid.
-static func _texture_for(role: Role) -> Texture2D:
+## The installed texture for a role, or null if no set is installed for it.
+##
+## [b]Public, and called by [G2GBspMap] rather than by anything here.[/b] An imported
+## `.bsp` map is drawn through its own lightmapped shader, and it is the half of the
+## game an installed set is for — see [constant TEXTURE_DIR].
+static func installed_texture(role: Role) -> Texture2D:
 	var path := "%s/%s" % [TEXTURE_DIR, ROLE_FILES.get(role, "floor.png")]
 
 	# ResourceLoader.exists rather than FileAccess.file_exists: an imported texture in
@@ -150,7 +181,7 @@ static func _texture_for(role: Role) -> Texture2D:
 		if loaded is Texture2D:
 			return loaded as Texture2D
 
-	return grid_texture()
+	return null
 
 
 ## The generated prototype grid: greyscale squares with a darker line every square and
@@ -209,7 +240,11 @@ static func describe() -> Dictionary:
 			installed.append(String(ROLE_FILES[role]))
 
 	return {
-		"source": "installed" if installed.size() > 0 else "generated",
+		# What the HAND-BUILT maps draw in, which is the grid either way. An installed
+		# set is listed beside it because it is what the imported maps draw in, and a
+		# server operator looking at a screenshot of one cannot tell from the picture.
+		"source": "generated",
+		"imported_source": "installed" if installed.size() > 0 else "generated",
 		"directory": TEXTURE_DIR,
 		"installed": installed,
 		"units_per_square": UNITS_PER_SQUARE,

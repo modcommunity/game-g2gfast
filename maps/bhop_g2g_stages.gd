@@ -9,7 +9,7 @@ extends G2GMap
 ## stages, splits, a stage restart, a per-stage comparison, a bonus on its own track —
 ## needs a map with more than one section in it.
 ##
-## This is the Counter-Strike staged-map shape: a course divided into numbered sections
+## This is the timer community's staged-map shape: a course divided into numbered sections
 ## with a line between each, so a run has a split at every line, a player can practise
 ## one section with [code]!s3[/code], and the HUD has something to say between the start
 ## and the finish. Each stage is one idea, so a player who fails knows which idea they

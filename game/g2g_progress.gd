@@ -10,7 +10,7 @@ extends Node
 ## that were missing.
 ##
 ## [b]Nothing here counts anything twice.[/b] `DotFpsStats` has counted jumps, perfect
-## jumps, strafes and top speed on every controller since dot-fps-controller was
+## jumps, strafes and top speed on every controller since dot-player-controller was
 ## written, and dot-timer counts runs and records. This node reads those out and files
 ## the difference — which is the only way two counters of one thing cannot disagree.
 ## The one figure it measures itself is distance, because nothing else does.

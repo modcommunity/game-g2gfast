@@ -54,6 +54,23 @@ const KINDS := {
 @export_range(0.0, 1.0) var ambient: float = 0.10
 @export_range(0.0, 4.0) var light_boost: float = 1.35
 
+## The same, for a surface drawn in the prototype set rather than in the map's own
+## texture.
+##
+## [b]Higher, because a prototype tile has no darks of its own to lose.[/b] A texture the
+## map carried is already a picture, so the baked lightmap only has to shade it. A
+## prototype tile is one flat colour and a grid, and the dark one is #333 before the
+## lightmap touches it -- in the parts of a surf map the compiler tone-mapped to black
+## it comes out black, and the grid a player is reading their speed off goes with it.
+##
+## [b]0.32, chosen by rendering it.[/b] Three values were put through the client and
+## looked at: at 0.0 the start room of surf_year3000 loses the grid on its floor and the
+## ramps go from orange to brown; at 0.55 the difference from 0.32 is not visible,
+## because by then the lightmap dominates everywhere it is not already black. So this
+## is the amount that lifts the crushed darks and stops, which is the same job
+## [member ambient] does and the same reason.
+@export_range(0.0, 1.0) var prototype_ambient: float = 0.32
+
 var manifest: Dictionary = {}
 var _bounds_min := Vector3.ZERO
 var _bounds_max := Vector3.ZERO
@@ -151,14 +168,99 @@ func _construct() -> void:
 		mi.set_surface_override_material(i, _material_for(surfaces[i], dir, lightmap))
 		written += 1
 
-	# One concave shape for the whole world. A surf map is static geometry and a
-	# trimesh is exactly what dot-fps-controller's sweeps want to test against.
-	mi.create_trimesh_collision()
+	var solids := _build_collision(mi, blob)
 
 	G2GGeometry.sun(self)
-	print("[bsp] %s: %d surfaces, %d verts, %d materials" % [
+	print("[bsp] %s: %d surfaces, %d verts, %d materials, %d collision shapes" % [
 		manifest.get("id", "?"), mesh.get_surface_count(),
-		mesh.surface_get_array_len(0) if mesh.get_surface_count() > 0 else 0, written])
+		mesh.surface_get_array_len(0) if mesh.get_surface_count() > 0 else 0,
+		written, solids])
+
+
+## The map's solid volume: one convex shape per brush, plus the displacements.
+##
+## [b]This is not built from the mesh, and building it from the mesh is the bug it
+## replaces.[/b] It was `create_trimesh_collision()` over the drawn geometry, on the
+## reasoning that a surf map is static and a trimesh is what a sweep wants. The premise
+## is wrong: in a Source map the drawn faces are only the ones that ended up visible,
+## and the solid is the brushes. A `nodraw` face is not drawn, a `toolsplayerclip` brush
+## -- which is how every surf ramp in the genre is made smooth to ride -- is never drawn
+## at all, and across the maps in `inspirations/` between 31% and 77% of the sides of a
+## solid brush are one or the other. So the collider was a shell with most of itself
+## missing and a player went through the map.
+##
+## [b]Convex per brush and not one trimesh, now that there is a choice.[/b] A concave
+## shape is loose triangles and a sliding hull catches on every interior edge between
+## them; on a 45-degree ramp at 3000 u/s that is a run ended by a bump that does not
+## exist. A brush is convex by construction, so each one is a single surface with no
+## interior edges -- which is the guarantee the genre's own player movement is built on.
+## Displacements are the exception, because terrain is not convex: they stay triangles,
+## welded across the map at import so at least the seams between them are shared.
+##
+## Returns how many shapes it made. A manifest with no `collision` block is one written
+## before there was one -- `user://maps` is full of those the moment anybody downloads a
+## map -- and falls back to the old trimesh, which is wrong in the way described above
+## but is still a map somebody can walk around.
+func _build_collision(mi: MeshInstance3D, blob: PackedByteArray) -> int:
+	var info: Dictionary = manifest.get("collision", {})
+	if info.is_empty():
+		mi.create_trimesh_collision()
+		return 1
+
+	var body := StaticBody3D.new()
+	body.name = "Solid"
+	add_child(body)
+
+	var made := 0
+	var offset := int(info.get("hull_offset", 0))
+	for _h in range(int(info.get("hull_count", 0))):
+		if offset + 4 > blob.size():
+			break
+		var count := int(blob.decode_u32(offset))
+		offset += 4
+		var floats := blob.slice(offset, offset + count * 12).to_float32_array()
+		offset += count * 12
+		if floats.size() < count * 3:
+			break
+		var points := PackedVector3Array()
+		points.resize(count)
+		for v in range(count):
+			# Genre units on the wire, metres in the scene -- the one boundary, as ever.
+			points[v] = Vector3(floats[v * 3], floats[v * 3 + 1],
+				floats[v * 3 + 2]) * G2GUnits.METRES_PER_UNIT
+		var hull := ConvexPolygonShape3D.new()
+		hull.points = points
+		var shape := CollisionShape3D.new()
+		shape.shape = hull
+		body.add_child(shape)
+		made += 1
+
+	var vertex_count := int(info.get("displacement_vertex_count", 0))
+	var index_count := int(info.get("displacement_index_count", 0))
+	if vertex_count > 0 and index_count > 0:
+		var voff := int(info.get("displacement_vertex_offset", 0))
+		var coords := blob.slice(voff, voff + vertex_count * 12).to_float32_array()
+		var ioff := int(info.get("displacement_index_offset", 0))
+		var indices := blob.slice(ioff, ioff + index_count * 4).to_int32_array()
+		var faces := PackedVector3Array()
+		faces.resize(index_count)
+		for i in range(index_count):
+			var v := int(indices[i]) * 3
+			if v + 2 >= coords.size():
+				continue
+			faces[i] = Vector3(coords[v], coords[v + 1],
+				coords[v + 2]) * G2GUnits.METRES_PER_UNIT
+		# `backface_collision` off: a displacement is terrain with a solid brush under
+		# it, and a two-sided one catches a player who is already inside the ground
+		# instead of letting them out of it.
+		var terrain := ConcavePolygonShape3D.new()
+		terrain.set_faces(faces)
+		var shape := CollisionShape3D.new()
+		shape.shape = terrain
+		body.add_child(shape)
+		made += 1
+
+	return made
 
 
 func _surface_arrays(blob: PackedByteArray, s: Dictionary) -> Array:
@@ -196,8 +298,8 @@ func _material_for(s: Dictionary, dir: String, lightmap: Texture2D) -> ShaderMat
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://game/g2g_bsp_lightmapped.gdshader")
 	mat.set_shader_parameter("lightmap_tex", lightmap)
-	mat.set_shader_parameter("ambient", ambient)
 	mat.set_shader_parameter("light_boost", light_boost)
+	mat.set_shader_parameter("ambient", ambient)
 
 	var texture_name := str(s.get("texture", ""))
 	if not texture_name.is_empty():
@@ -206,13 +308,31 @@ func _material_for(s: Dictionary, dir: String, lightmap: Texture2D) -> ShaderMat
 			mat.set_shader_parameter("albedo_tex", tex)
 			mat.set_shader_parameter("has_albedo", true)
 			mat.set_shader_parameter("tint", Color.WHITE)
+			mat.set_shader_parameter("uv_scale", 1.0)
 			return mat
 
-	# No texture: it lived in the game's own VPKs and was never in this file. Paint it
-	# with the g2gfast role colour, which is what an untextured surface here means.
-	mat.set_shader_parameter("has_albedo", false)
-	mat.set_shader_parameter("tint", G2GTextures.ROLE_COLOURS.get(
-		_role(str(s.get("role", "FLOOR"))), Color(0.42, 0.44, 0.48)))
+	# No texture the map carried: it lived in the game's own VPKs and was never inside
+	# this file, which on a surf map is most of the map -- 97% of surf_beginner2's
+	# triangles. This used to be painted a flat role colour and that is what the whole
+	# map looked like: one grey mass with the ride invisible in it. It gets the same
+	# prototype set the hand-built maps draw in instead, chosen by what the surface is
+	# FOR, which the importer worked out from its slope.
+	var role := _role(str(s.get("role", "FLOOR")))
+	var installed := G2GTextures.installed_texture(role)
+	mat.set_shader_parameter("albedo_tex",
+		installed if installed != null else G2GTextures.grid_texture())
+	mat.set_shader_parameter("has_albedo", true)
+	# An installed set carries its own colour per role; the generated grid is greyscale
+	# and the role tint is the only thing telling a ramp from a wall in it. Same rule as
+	# [method G2GTextures.material_for], and it has to be the same rule, or a surf ramp
+	# is one colour in a hand-built map and another in an imported one.
+	mat.set_shader_parameter("tint", Color.WHITE if installed != null
+		else G2GTextures.ROLE_COLOURS.get(role, Color(0.42, 0.44, 0.48)))
+	# The mesh carries UVs in 64-unit grid squares; this is the tile's share of it.
+	mat.set_shader_parameter("uv_scale", 1.0 / float(
+		G2GTextures.INSTALLED_SQUARES_PER_TILE if installed != null
+		else G2GTextures.SQUARES_PER_TILE))
+	mat.set_shader_parameter("ambient", prototype_ambient)
 	return mat
 
 

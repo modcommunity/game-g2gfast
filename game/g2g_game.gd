@@ -14,7 +14,7 @@ extends Node3D
 ## [/codeblock]
 ##
 ## [b]What is this game's own, versus the addons'.[/b] Every rule about movement lives
-## in dot-fps-controller, every rule about timing in dot-timer, maps in dot-map,
+## in dot-player-controller, every rule about timing in dot-timer, maps in dot-map,
 ## records in dot-leaderboard. What this file adds is the joins — the tick order, the
 ## unit boundary, the moment a cvar change reaches thirty players — and the joins are
 ## where every bug in this family has been.
@@ -106,6 +106,14 @@ var effects: G2GEffects = null
 ## belong to whoever decides whether a run counted.
 var progress: G2GProgress = null
 
+## Who is in the session, which side, what class, where they start, and the physics.
+##
+## [b]Built last and binds to everything else.[/b] It adds no authority: the timers
+## still time, the boards still rank. What it does is keep one set of records in step,
+## so a scoreboard, a spectator seat and a start selector read the same thing rather
+## than three dictionaries that agree until somebody reconnects. See [G2GPlayerStack].
+var player_stack: G2GPlayerStack = null
+
 var _samples: Dictionary = {}
 var _tick: int = 0
 var _accumulator: float = 0.0
@@ -155,12 +163,36 @@ func _ready() -> void:
 	_build_progress()
 	_build_layers()
 	_build_maps()
+	_build_player_stack()
 
 	set_physics_process(true)
 
 	if config.initial_map != &"":
 		var started: DotResult = await change_map(config.initial_map)
 		DotLog.result(CHANNEL, "loading the first map", started)
+
+
+## Stands up the player-facing addons and binds them to this game.
+##
+## After the layers and the maps, because it reads the spectator manager the layers
+## built and the start points the map session will load — and a stack built before any
+## of that binds to nothing and reports success.
+func _build_player_stack() -> void:
+	player_stack = G2GPlayerStack.new()
+	player_stack.name = "PlayerStack"
+	# A client mirrors the server's rate; re-applying a profile there would have it
+	# simulate at a rate the server does not, which on a timer server is the difference
+	# between a run that validates and one that does not.
+	player_stack.apply_physics = authoritative
+	add_child(player_stack)
+
+	var res := player_stack.setup(self)
+
+	if not res.ok:
+		DotLog.warn(CHANNEL, "the player stack is off", {"why": res.error.message})
+		remove_child(player_stack)
+		player_stack.queue_free()
+		player_stack = null
 
 
 ## The engine's rate when a server has set it, else the export. See game-playground.
@@ -672,6 +704,9 @@ func current_tick() -> int:
 func tick_once(tick: int) -> void:
 	_tick = tick
 	_simulate_tick(1.0 / float(maxi(tick_rate, 1)))
+
+	if player_stack != null:
+		player_stack.tick(tick)
 
 
 ## Feeds every timer from the players' current positions without moving anybody.

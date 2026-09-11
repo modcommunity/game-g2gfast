@@ -40,7 +40,8 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bsp_read import (Bsp, SKIP_MASK, clean_material, to_godot, yaw_to_godot,  # noqa: E402
-                      LUMP_ENTITIES)
+                      LUMP_ENTITIES, MASK_PLAYERSOLID, CONTENTS_PLAYERCLIP,
+                      SOLID_BRUSH_ENTITIES, NONSOLID_BRUSH_ENTITIES)
 import vtf  # noqa: E402
 
 LUMP_LIGHTING, LUMP_PAKFILE, LUMP_PLANES = 8, 40, 1
@@ -63,24 +64,74 @@ LM_PAD = 1
 # ceiling speed.
 MIN_ZONE_THICKNESS = 192.0
 
-# Where the six g2gfast roles come from. A material's name is the only description of
-# intent a compiled .bsp still carries -- the brush entity that knew "this is the start
-# platform" is gone -- and in this genre the names are conventional enough to use:
-# every surf map on earth puts its ride surface on some variant of `concretefloor039a`.
-ROLE_RULES = [
-    (r"ramp|concretefloor039a|bathroom_tile_floor_lg|neon_b\b", "RAMP"),
-    (r"^tools/|nodraw|toolsblack", "PLATFORM"),
-    (r"sky|light|white001|neon", "PLATFORM"),
-    (r"grid|glass", "PLATFORM"),
-    (r"rock|sand|grass|nature|dirt|lava", "FLOOR"),
-]
+# Where the g2gfast roles come from: the angle of the surface, not the name on it.
+#
+# [b]The material name was a guess and the slope is a fact.[/b] This used to be a list
+# of regexes over texture names -- `concretefloor039a` is a ramp, `nodraw` is a
+# platform -- on the reasoning that the name is the only intent a compiled .bsp still
+# carries. It is not. The geometry carries the one piece of intent that matters here,
+# because in this genre what a surface is FOR is exactly what its angle lets a player
+# do with it, and that is a number in the plane lump. Measured over the maps in
+# `inspirations/`, face area by normal Z comes out in three clean bands every time:
+# ~30-43% at +1.0 (floors), ~46-55% at 0.0 (walls) and a distinct 1.6-8.5% at +0.6/+0.7
+# -- the ride. The regexes scored none of that: surf_beginner2 came out 97% FLOOR, one
+# flat grey mass with the ramps in it invisible.
+#
+# The threshold is the game's own. A player stands on a surface up to
+# `G2GConfig.max_slope` and slides off anything steeper, so that angle is precisely the
+# line between "a platform" and "a ramp" -- and painting it anywhere else would be a
+# texture that lies about what the movement will do. The default below is that cvar's
+# default; `--max-slope` is there for an operator who has changed it.
+MAX_SLOPE_DEGREES = 45.57
+
+# Below this the surface is a wall, not a ride. A plane at 87 degrees is vertical for
+# every purpose a player has, and calling it a ramp paints slivers of ride colour down
+# every wall in the map that was not drawn exactly on the grid.
+RAMP_MIN_NORMAL_Z = 0.05
 
 
-def role_for(material):
-    for pattern, role in ROLE_RULES:
-        if re.search(pattern, material, re.I):
-            return role
-    return "FLOOR"
+def role_for_normal(nz, cos_limit):
+    """What a surface is for, from which way it faces. Source axes: +Z is up."""
+    if nz >= cos_limit:
+        return "PLATFORM"       # a player stands here
+    if nz > RAMP_MIN_NORMAL_Z:
+        return "RAMP"           # a player slides off here: the ride
+    return "FLOOR"              # walls, ceilings and undersides
+
+
+# How many of the genre's units one grid square covers. [G2GTextures]'s own
+# UNITS_PER_SQUARE, and it has to stay that way: a square is 64 units on every surface
+# in this game, in a hand-built map and an imported one alike, because its size in the
+# world is the only cue a player has for how fast the ground is moving past them.
+#
+# [b]A prototype UV here is measured in SQUARES, not in tiles.[/b] How many squares are
+# in one tile is a property of the image -- the vendored Kenney tile has eight and the
+# generated fallback has four -- and it is not known here, because which of the two a
+# map ends up drawn in is decided at load time by what is installed. So the mesh
+# carries the part that is about the world and the material scales it by the part that
+# is about the texture. Baking a tile count in instead would be a map that silently
+# halves its grid the day the texture set is swapped.
+UNITS_PER_SQUARE = 64.0
+
+
+def tangent_frame(n):
+    """Two unit axes in the plane of a face, for projecting a prototype grid onto it.
+
+    [b]Not an axis-aligned projection, which is the obvious alternative.[/b] Dropping
+    the dominant axis and using the other two is one line, and on a 45-degree surf ramp
+    it stretches the grid by a factor of root two along the exact direction the player
+    is travelling -- so the one surface whose texture is being read for speed is the one
+    surface whose texture is the wrong size. A frame built in the plane has no stretch
+    anywhere, and it falls out of it that one axis runs straight down the slope, which
+    is the line a surfer steers by.
+    """
+    up = (0.0, 0.0, 1.0) if abs(n[2]) < 0.9 else (0.0, 1.0, 0.0)
+    t = (up[1] * n[2] - up[2] * n[1], up[2] * n[0] - up[0] * n[2],
+         up[0] * n[1] - up[1] * n[0])
+    ln = math.sqrt(t[0] ** 2 + t[1] ** 2 + t[2] ** 2) or 1.0
+    t = (t[0] / ln, t[1] / ln, t[2] / ln)
+    b = (n[1] * t[2] - n[2] * t[1], n[2] * t[0] - n[0] * t[2], n[0] * t[1] - n[1] * t[0])
+    return t, b
 
 
 # ---------------------------------------------------------------- pakfile ----
@@ -204,27 +255,61 @@ def build_lightmap(bsp, faces, path):
 
 # ----------------------------------------------------------------- meshing ----
 def face_normal(bsp, f):
-    n = bsp.planes[f[0]][:3]
-    return (-n[0], -n[1], -n[2]) if f[1] else n
+    """A face's outward normal: its own plane's, and not conditionally flipped.
+
+    [b]This used to negate when `dface_t.side` was set, and that is wrong here.[/b]
+    `side` records which side of the NODE's plane the face fell on, which is a fact
+    about the tree; the face's own `planenum` already points at the right one of the
+    plane pair, because a Source BSP stores every plane twice with opposite normals and
+    vbsp writes the twin. Negating on top of that inverted the normal of every face
+    with the flag -- 26% of surf_year3000, 40% of surf_beginner2.
+
+    Measured rather than reasoned about, because the documentation for that field reads
+    both ways. For 1500 faces of surf_year3000 the centroid was pushed six units each
+    way and tested against every solid brush in the map: where one side was solid and
+    the other was not -- 908 of them -- the plane normal pointed away from the solid
+    908 times with the side flag clear and 178 times with it set, and pointed into the
+    solid twice in total.
+
+    [b]Nothing could see it until now.[/b] The normals went into ARRAY_NORMAL and the
+    shader that reads them is `unshaded`, so a map lit by its own baked lightmap looks
+    identical either way, and backface culling follows the winding rather than the
+    normal. It is visible for the first time because the surface roles are read off the
+    slope now, and an inverted normal makes a ceiling a platform.
+    """
+    return bsp.planes[f[0]][:3]
 
 
-def build_mesh(bsp, out_bin, lm_place, lm_w, lm_h):
-    """One vertex block and one index block per material."""
-    planes = bsp.planes
-    groups = collections.defaultdict(lambda: ([], []))     # mat -> (verts, indices)
+def build_mesh(bsp, lm_place, lm_w, lm_h, textured, cos_limit, prototype):
+    """One vertex block and one index block per (material, role).
+
+    [b]Per role and not per material, because a role is per face.[/b] The role comes
+    from the slope now (see `role_for_normal`), and one material is used at every angle
+    a map has -- `concretefloor039a` is the ride surface AND the walls of the corridor
+    around it. Keyed by material alone, the whole map takes whichever role its first
+    face happened to have, which is how surf_beginner2 came out 97% FLOOR.
+
+    `textured` says which materials the pakfile actually carried. A material it did not
+    -- CS:S stock, which is most of what a surf map is built from -- gets the prototype
+    set instead of the flat role colour it used to get, and needs a different UV to do
+    it: the map's own UVs place a texture the way the mapper placed it, and a prototype
+    grid has to be placed in the world instead, at one size everywhere. So the two UVs
+    cannot both be written and the choice is made here, per surface.
+    """
+    groups = collections.defaultdict(lambda: ([], []))     # (mat, role) -> (verts, indices)
     dedupe = collections.defaultdict(dict)
 
-    def emit(mat, pos_src, nrm_src, uv, uv2):
-        verts, _ = groups[mat]
-        key = (round(pos_src[0], 2), round(pos_src[1], 2), round(pos_src[2], 2),
-               round(nrm_src[0], 3), round(nrm_src[1], 3), round(nrm_src[2], 3),
-               round(uv[0], 4), round(uv[1], 4), round(uv2[0], 5), round(uv2[1], 5))
-        d = dedupe[mat]
-        if key in d:
-            return d[key]
+    def emit(key, pos_src, nrm_src, uv, uv2):
+        verts, _ = groups[key]
+        k = (round(pos_src[0], 2), round(pos_src[1], 2), round(pos_src[2], 2),
+             round(nrm_src[0], 3), round(nrm_src[1], 3), round(nrm_src[2], 3),
+             round(uv[0], 4), round(uv[1], 4), round(uv2[0], 5), round(uv2[1], 5))
+        d = dedupe[key]
+        if k in d:
+            return d[k]
         g, gn = to_godot(pos_src), to_godot(nrm_src)
         verts.append((g, gn, uv, uv2))
-        d[key] = len(verts) - 1
+        d[k] = len(verts) - 1
         return len(verts) - 1
 
     white = (2.0 / lm_w, 2.0 / lm_h)
@@ -234,13 +319,24 @@ def build_mesh(bsp, out_bin, lm_place, lm_w, lm_h):
         if flags & SKIP_MASK:
             continue
         mat = clean_material(mat_raw)
+        n = face_normal(bsp, f)
+        role = role_for_normal(n[2], cos_limit)
+        # `all` repaints the map's own textures too; `auto` keeps them and only fills
+        # in the ones that lived in the game's VPKs and were never in this file.
+        use_prototype = prototype == "all" or (prototype == "auto" and mat not in textured)
+        key = (mat, role, use_prototype)
+
         ti = bsp.texinfo[f[5]]
         tw, th = 1, 1
         td = int(ti[17])
         if 0 <= td < len(bsp.texdata):
             tw, th = max(1, bsp.texdata[td][4]), max(1, bsp.texdata[td][5])
+        tan, bit = tangent_frame(n)
 
         def uv_of(p):
+            if use_prototype:
+                return ((p[0] * tan[0] + p[1] * tan[1] + p[2] * tan[2]) / UNITS_PER_SQUARE,
+                        (p[0] * bit[0] + p[1] * bit[1] + p[2] * bit[2]) / UNITS_PER_SQUARE)
             u = (p[0] * ti[0] + p[1] * ti[1] + p[2] * ti[2] + ti[3]) / tw
             v = (p[0] * ti[4] + p[1] * ti[5] + p[2] * ti[6] + ti[7]) / th
             return (u, v)
@@ -256,7 +352,7 @@ def build_mesh(bsp, out_bin, lm_place, lm_w, lm_h):
             lv = min(max(lv, 0.0), float(f[14]))
             return ((pl[0] + lu + 0.5) / lm_w, (pl[1] + lv + 0.5) / lm_h)
 
-        _, idx = groups[mat]
+        _, idx = groups[key]
         if f[6] >= 0:
             tris = bsp.displacement_tris(f)
             # Displacements are terrain: average the normals over the grid so a
@@ -266,31 +362,31 @@ def build_mesh(bsp, out_bin, lm_place, lm_w, lm_h):
             for t in tris:
                 u = [t[1][i] - t[0][i] for i in range(3)]
                 v = [t[2][i] - t[0][i] for i in range(3)]
-                n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
-                     u[0] * v[1] - u[1] * v[0]]
+                nn = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+                      u[0] * v[1] - u[1] * v[0]]
                 for p in t:
                     k = (round(p[0], 2), round(p[1], 2), round(p[2], 2))
                     for i in range(3):
-                        acc[k][i] += n[i]
+                        acc[k][i] += nn[i]
             for t in tris:
                 for p in t:
                     k = (round(p[0], 2), round(p[1], 2), round(p[2], 2))
-                    n = acc[k]
-                    ln = math.sqrt(sum(c * c for c in n)) or 1.0
-                    idx.append(emit(mat, p, [c / ln for c in n], uv_of(p), uv2_of(p)))
+                    nn = acc[k]
+                    ln = math.sqrt(sum(c * c for c in nn)) or 1.0
+                    idx.append(emit(key, p, [c / ln for c in nn], uv_of(p), uv2_of(p)))
         else:
             pts = bsp.face_points(f)
             if len(pts) < 3:
                 continue
-            n = face_normal(bsp, f)
-            ring = [emit(mat, p, n, uv_of(p), uv2_of(p)) for p in pts]
+            ring = [emit(key, p, n, uv_of(p), uv2_of(p)) for p in pts]
             for k in range(1, len(ring) - 1):
                 # Source winds its faces the other way round from Godot's front face.
                 idx.extend((ring[0], ring[k + 1], ring[k]))
 
     surfaces, blob = [], bytearray()
-    for mat in sorted(groups):
-        verts, idx = groups[mat]
+    for key in sorted(groups):
+        mat, role, use_prototype = key
+        verts, idx = groups[key]
         if not idx:
             continue
         voff = len(blob)
@@ -300,11 +396,119 @@ def build_mesh(bsp, out_bin, lm_place, lm_w, lm_h):
         ioff = len(blob)
         for i in idx:
             blob += struct.pack("<I", i)
-        surfaces.append({"material": mat, "role": role_for(mat),
+        surfaces.append({"material": mat, "role": role, "prototype": use_prototype,
                          "vertex_offset": voff, "vertex_count": len(verts),
                          "index_offset": ioff, "index_count": len(idx)})
-    open(out_bin, "wb").write(bytes(blob))
-    return surfaces
+    return surfaces, bytes(blob)
+
+
+# ---------------------------------------------------------------- collision ---
+def build_collision(bsp, notes):
+    """Every solid in the map as convex hulls, plus the displacements as triangles.
+
+    [b]This is the half the importer did not have, and the one a player notices.[/b]
+    Collision used to be `create_trimesh_collision()` over the drawn mesh, and the
+    drawn mesh is not the solid: see MASK_PLAYERSOLID in bsp_read. A `nodraw` face is
+    absent from it, a `toolsplayerclip` brush is absent from it entirely, and on
+    Surf_Mesa 77% of the sides of a solid brush are one or the other -- so the
+    collision shell had holes in it the size of the brushes it was meant to be, and a
+    player fell through the map.
+
+    [b]Convex per brush, and not one big trimesh, because this is a surf game.[/b] A
+    concave shape collides as loose triangles, and a hull sliding across one meets
+    every interior edge between them -- the classic catch on a seam in a flat floor,
+    which on a 45-degree ramp at 3000 u/s is a run ended by a bump that is not there.
+    A brush is convex by construction and Godot's solver treats a convex shape as one
+    surface with no interior edges at all, which is exactly the guarantee Source's own
+    player movement is built on. It is also what makes the count affordable: 2500
+    boxes and wedges is cheap to broadphase, and it is the shape the mapper drew.
+
+    Displacements are the exception and get triangles, because a displacement is
+    terrain and is not convex in any useful way. There are 1850 of them in surf_summit
+    and 1434 in Surf_Mesa, several of which are ramps players ride.
+    """
+    hulls = []
+
+    def add_model(model, offset, why):
+        for i in sorted(bsp.model_brushes(model)):
+            contents = bsp.brushes[i][2]
+            if not contents & MASK_PLAYERSOLID:
+                continue
+            pts = bsp.brush_hull(i)
+            if len(pts) < 4:
+                # A brush whose sides do not enclose anything. Not fatal and not
+                # silent: it is either a reader bug or a brush the compiler broke,
+                # and both are things a person wants to be told.
+                notes.append("%s brush %d has no hull (%d corners)" % (why, i, len(pts)))
+                continue
+            hulls.append((pts, offset, contents))
+
+    add_model(0, (0.0, 0.0, 0.0), "world")
+
+    skipped = collections.Counter()
+    for e in bsp.entities:
+        model = e.get("model", "")
+        if not model.startswith("*"):
+            continue
+        index = int(model[1:])
+        if not 0 < index < len(bsp.models):
+            continue
+        name = e.get("classname", "?")
+        if name in SOLID_BRUSH_ENTITIES:
+            add_model(index, tuple(entity_origin(e)), name)
+        else:
+            skipped[name] += 1
+            if name not in NONSOLID_BRUSH_ENTITIES and not name.startswith("trigger_"):
+                notes.append("%s is a brush entity neither list in bsp_read knows; "
+                             "treated as non-solid" % name)
+
+    # No count in front of the hulls: the manifest already carries `hull_count`, and a
+    # second copy of a number is a second thing that can be wrong. The block is a bare
+    # run of <point count><points>, the way the surface blocks above are bare arrays.
+    blob = bytearray()
+    clips = 0
+    for pts, off, contents in hulls:
+        if contents & CONTENTS_PLAYERCLIP:
+            clips += 1
+        blob += struct.pack("<I", len(pts))
+        for p in pts:
+            blob += struct.pack("<3f", *to_godot([p[a] + off[a] for a in range(3)]))
+
+    # The displacement surface, welded across the whole map so that two displacements
+    # sharing an edge share its vertices -- an unwelded seam is a crack a hull can
+    # catch on, which is the one thing the convex half above exists to avoid.
+    verts, index_of, tris = [], {}, []
+    for f in bsp.faces:
+        if f[6] < 0:
+            continue
+        if bsp.face_material(f)[1] & SKIP_MASK:
+            continue
+        for t in bsp.displacement_tris(f):
+            for point in t:
+                key = (round(point[0], 2), round(point[1], 2), round(point[2], 2))
+                i = index_of.get(key)
+                if i is None:
+                    i = index_of[key] = len(verts)
+                    verts.append(to_godot(point))
+                tris.append(i)
+
+    vertex_offset = len(blob)
+    for v in verts:
+        blob += struct.pack("<3f", *v)
+    index_offset = len(blob)
+    for i in tris:
+        blob += struct.pack("<I", i)
+
+    info = {
+        "hull_count": len(hulls),
+        "hull_offset": 0,
+        "displacement_vertex_offset": vertex_offset,
+        "displacement_vertex_count": len(verts),
+        "displacement_index_offset": index_offset,
+        "displacement_index_count": len(tris),
+        "playerclip_hulls": clips,
+    }
+    return bytes(blob), info, skipped
 
 
 # -------------------------------------------------------------------- zones ---
@@ -601,7 +805,7 @@ POINT_KINDS = ("SPAWN",)
 #
 # A Source `info_teleport_destination` is at the player's feet and so is the middle of
 # a zone's floor, so SOMETHING has to lift a player off it: a foot resting at exactly
-# the floor's height is the state dot-fps-controller's own notes describe as never
+# the floor's height is the state dot-player-controller's own notes describe as never
 # reporting ground again. It was 8 units, which is 15 cm, and 15 cm turns out to be
 # inside the noise.
 #
@@ -981,6 +1185,15 @@ def main(argv=None):
     ap.add_argument("--zones-dir", default=None, dest="zones_dir",
                     help="where per-map zone overrides live "
                          "(default <repo>/maps/zones; see load_overrides)")
+    ap.add_argument("--prototype", choices=("auto", "all", "off"), default="auto",
+                    help="paint surfaces with the prototype texture set: `auto` only "
+                         "where the .bsp carried no texture of its own (default), "
+                         "`all` everywhere, `off` never")
+    ap.add_argument("--max-slope", type=float, default=MAX_SLOPE_DEGREES,
+                    dest="max_slope",
+                    help="the steepest a player can stand on, in degrees; the line "
+                         "between a PLATFORM and a RAMP. Must match G2GConfig.max_slope "
+                         "(default %g)" % MAX_SLOPE_DEGREES)
     ap.add_argument("--min-zone-thickness", type=float, default=MIN_ZONE_THICKNESS,
                     dest="min_zone_thickness",
                     help="least a zone volume may measure on any axis, in genre units "
@@ -1001,14 +1214,33 @@ def main(argv=None):
 
     lm_path = os.path.join(d, map_id + "_lightmap.png")
     place, lm_w, lm_h = build_lightmap(bsp, faces, lm_path)
-    surfaces = build_mesh(bsp, os.path.join(d, map_id + ".bin"), place, lm_w, lm_h)
 
+    # The textures are decoded BEFORE the mesh, because which of them the pakfile
+    # actually carried is what decides whether a surface gets the map's own UVs or a
+    # world-placed prototype grid, and a vertex can only carry one of the two.
     pak = read_pak(bsp)
-    tex = extract_textures(pak, [s["material"] for s in surfaces], os.path.join(d, "textures"))
+    materials = sorted({clean_material(bsp.face_material(f)[0]) for f in faces})
+    tex = extract_textures(pak, materials, os.path.join(d, "textures"))
+    textured = {m for m, (png, _) in tex.items() if png}
+
+    cos_limit = math.cos(math.radians(a.max_slope))
+    surfaces, mesh_blob = build_mesh(bsp, place, lm_w, lm_h, textured, cos_limit,
+                                     a.prototype)
     for s in surfaces:
         png, translucent = tex.get(s["material"], (None, False))
-        s["texture"] = png
-        s["translucent"] = translucent
+        s["texture"] = None if s["prototype"] else png
+        s["translucent"] = translucent and not s["prototype"]
+
+    notes = []
+    collision_blob, collision, skipped_entities = build_collision(bsp, notes)
+    # The collision block lives in the same .bin, after the mesh, so a map is still the
+    # four files it was. Its offsets are written relative to its own block and shifted
+    # here, which keeps build_collision independent of what precedes it.
+    for key in ("hull_offset", "displacement_vertex_offset", "displacement_index_offset"):
+        collision[key] += len(mesh_blob)
+    with open(os.path.join(d, map_id + ".bin"), "wb") as fh:
+        fh.write(mesh_blob)
+        fh.write(collision_blob)
 
     z, spawns, respawn, push, other, dropped = classify_zones(
         bsp, a.min_zone_thickness, doc)
@@ -1026,6 +1258,9 @@ def main(argv=None):
         "bounds": {"min": list(to_godot(lo)), "max": list(to_godot(hi))},
         "lightmap": {"file": os.path.basename(lm_path), "width": lm_w, "height": lm_h},
         "surfaces": surfaces,
+        "collision": collision,
+        "units_per_square": UNITS_PER_SQUARE,
+        "max_slope": a.max_slope,
         "spawn": pick_spawn(spawns),
         "spawns": spawns,
         "min_zone_thickness": a.min_zone_thickness,
@@ -1048,10 +1283,24 @@ def main(argv=None):
         json.dump(manifest, fh, indent=1)
 
     tris = sum(s["index_count"] for s in surfaces) // 3
-    textured = sum(s["index_count"] for s in surfaces if s["texture"]) // 3
+    from_pak = sum(s["index_count"] for s in surfaces if s["texture"]) // 3
     print("%s -> %s" % (os.path.basename(a.bsp), d))
-    print("  %d surfaces, %d tris (%d%% textured from the pakfile)"
-          % (len(surfaces), tris, textured * 100 // max(1, tris)))
+    print("  %d surfaces, %d tris (%d%% textured from the pakfile, %d%% prototype)"
+          % (len(surfaces), tris, from_pak * 100 // max(1, tris),
+             (tris - from_pak) * 100 // max(1, tris)))
+    by_role = collections.Counter()
+    for s in surfaces:
+        by_role[s["role"]] += s["index_count"] // 3
+    print("  roles at %g degrees: %s" % (a.max_slope, ", ".join(
+        "%s %d%%" % (r, by_role[r] * 100 // max(1, tris))
+        for r in ("PLATFORM", "RAMP", "FLOOR"))))
+    print("  collision: %d convex hulls (%d of them playerclip), %d displacement tris"
+          % (collision["hull_count"], collision["playerclip_hulls"],
+             collision["displacement_index_count"] // 3))
+    if skipped_entities:
+        print("  %d brush entities left non-solid: %s"
+              % (sum(skipped_entities.values()),
+                 ", ".join("%s x%d" % kv for kv in skipped_entities.most_common(6))))
     print("  lightmap %dx%d, %d lit faces" % (lm_w, lm_h, len(place)))
     inflated = sum(1 for v in respawn if v.get("inflated"))
     print("  %d spawns, %d respawn volumes (%d thickened to %g units), %d push, %d other"
@@ -1072,7 +1321,7 @@ def main(argv=None):
     # Said out loud rather than kept: a note nothing prints is this family's own
     # "produced correctly and consumed by nothing", and two volumes quietly becoming
     # one is exactly the kind of thing somebody wants to be told about.
-    for note in z.notes:
+    for note in z.notes + notes:
         print("  note: %s" % note)
     print("  start spawn at %s units" % [round(v) for v in manifest["spawn"]["origin"]])
 

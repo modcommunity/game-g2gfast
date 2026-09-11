@@ -286,12 +286,16 @@ func _test_runnable() -> void:
 func _test_stands_on_it() -> void:
 	print("collision")
 	var node := game.current_map_node()
-	var mi := node.get_node_or_null("World") as MeshInstance3D
-	var body: Node = mi.get_node_or_null("World_col") if mi != null else null
-	if body == null and mi != null:
-		for c in mi.get_children():
-			if c is StaticBody3D:
-				body = c
+	# Anywhere under the map, not under the MeshInstance3D. The solid used to BE the
+	# mesh -- `create_trimesh_collision()` parents a `World_col` to it -- and it is not
+	# any more: it is built from the .bsp's brushes, which is a different set of
+	# geometry from the drawn faces and belongs to the map rather than to the drawing of
+	# it. The old shape is still what a pre-collision manifest falls back to, so this
+	# has to find both.
+	var body: Node = null
+	for c in node.find_children("*", "StaticBody3D", true, false):
+		body = c
+		break
 	_check(body is StaticBody3D, "the world has a static body")
 	var shape_count := 0
 	if body != null:
