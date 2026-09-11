@@ -98,7 +98,18 @@ func _module_load() -> DotResult:
 	add_command("g2g_style", _cmd_style, "List styles, or switch", "").with_chat()
 	add_command("g2g_track", _cmd_track, "main, or bonus <n>", "").with_chat()
 	add_command("g2g_top", _cmd_top, "Fastest times here", "").with_chat()
-	add_command("g2g_map", _cmd_map, "Change map, or list them", DotAdminFlags.CHANGEMAP)
+	# **Console-only, deliberately, and `examples/dedicated.gd` asserts it.**
+	# Every other command in this block is `.with_chat()`; this one is not, and the
+	# difference is the genre. A map change destroys every run in progress, so on a
+	# records server it is not something a player with the flag should be able to do
+	# by typing mid-run — it goes through the console, RCON, or the vote.
+	#
+	# A command relayed from the website arrives as `Source.CHAT` by default and is
+	# therefore refused here too. `DotChatRelayConfig.command_source` is the switch for
+	# an operator who wants their site admins to reach it.
+	add_command(
+		"g2g_map", _cmd_map, "Change map, or list them", DotAdminFlags.CHANGEMAP
+	)
 	add_command("g2g_maps_reload", _cmd_maps_reload,
 		"Re-read maps/ from disk, picking up anything dropped in", DotAdminFlags.CHANGEMAP)
 	add_command("g2g_rtv", _cmd_rtv, "Rock the vote", "").with_chat()
