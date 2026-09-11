@@ -411,6 +411,15 @@ func _build_relay() -> DotResult:
 		return DotResult.success(null)
 
 	if backbone == null:
+		# **Found, not handed over.** A backbone client is built by whatever owns the
+		# server's credential — dot-server-setup-test's `TmcReport`, or this game's own
+		# identity layer — and a relay built during module load exists before any host
+		# could assign one. `DotBackboneClient` publishes itself under this name for
+		# exactly that reason; the ordering trap is the one that left dot-server's audit
+		# log unopened in every default configuration.
+		backbone = DotRegistry.get_service(&"dot_backbone_client")
+
+	if backbone == null:
 		return DotResult.fail(
 			DotError.CODE_STATE,
 			"The chat relay is on but no backbone client was handed to services."
