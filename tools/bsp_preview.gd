@@ -30,14 +30,25 @@ func _ready() -> void:
 	var map: Node3D = packed.instantiate()
 	if map is G2GBspMap:
 		(map as G2GBspMap).build_from(def)
-	# Set before add_child: _build() runs from _ready(), so an override applied
-	# afterwards is applied to materials that already exist.
-	if args.size() > 4 and map is G2GBspMap:
-		(map as G2GBspMap).ambient = float(args[4])
-	if args.size() > 5 and map is G2GBspMap:
-		(map as G2GBspMap).light_boost = float(args[5])
 	add_child(map)
 	await get_tree().process_frame
+
+	# [b]Set on the MATERIALS, not on the node.[/b] The comment that stood here said
+	# to assign these before `add_child` because `_build()` runs from `_ready()`. It
+	# does not: `build_from` above builds there and then, so every material already
+	# exists by the time either line runs and an assignment to the export reaches
+	# nothing. Both overrides had never once changed a pixel -- the two renders that
+	# proved it came out byte-identical.
+	if args.size() > 4 or args.size() > 5:
+		for mi: MeshInstance3D in _meshes(map):
+			for i in range(mi.get_surface_override_material_count()):
+				var m := mi.get_surface_override_material(i) as ShaderMaterial
+				if m == null:
+					continue
+				if args.size() > 4:
+					m.set_shader_parameter("ambient", float(args[4]))
+				if args.size() > 5:
+					m.set_shader_parameter("light_boost", float(args[5]))
 
 	# `lm` overrides every material to show the baked lighting alone. A map whose
 	# albedo is black -- kitsune's is, over 5892 triangles of `tools/toolsblack` --
@@ -57,15 +68,39 @@ func _ready() -> void:
 	var aabb := _world_aabb(map)
 	print("[preview] %s aabb pos=%s size=%s m" % [id, aabb.position, aabb.size])
 
-	var env := WorldEnvironment.new()
-	var e := Environment.new()
-	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.05, 0.06, 0.09)
-	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.30, 0.32, 0.38)
-	e.ambient_light_energy = 0.5
-	env.environment = e
-	add_child(env)
+	# [b]The map brings its own [WorldEnvironment] and it was silently winning this one.[/b]
+	# A second `WorldEnvironment` in a tree does not merge with the first and does not
+	# warn at runtime -- one of them is simply used. So every diagnostic render this tool
+	# has ever produced was drawn under the MAP's tone map, fog and glow while its own
+	# code below said, plainly, that it was drawing under a neutral one. That is the
+	# worst kind of instrument: it reports a number that is about something else.
+	#
+	# It matters most for `lm`, whose entire job is to show the baked lighting with
+	# nothing on top of it. Under the map's own environment a lightmap spanning code
+	# values 9 to 249 rendered as a flat 167-to-227 wash and the lighting looked broken
+	# when it was fine -- the fog was what flattened it.
+	#
+	# So the map's is taken out and named, rather than left to chance. `keepenv` as the
+	# fourth argument puts it back, for the one question this tool cannot otherwise
+	# answer: what the map looks like as the GAME draws it.
+	var keep_env := args.size() > 7 and args[7] == "keepenv"
+	for found: WorldEnvironment in _environments(map):
+		print("[preview] map environment: %s%s" % [found.name,
+			" (kept)" if keep_env else " (removed; pass keepenv to keep it)"])
+		if not keep_env:
+			found.get_parent().remove_child(found)
+			found.queue_free()
+
+	if not keep_env:
+		var env := WorldEnvironment.new()
+		var e := Environment.new()
+		e.background_mode = Environment.BG_COLOR
+		e.background_color = Color(0.05, 0.06, 0.09)
+		e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		e.ambient_light_color = Color(0.30, 0.32, 0.38)
+		e.ambient_light_energy = 0.5
+		env.environment = e
+		add_child(env)
 
 	var cam := Camera3D.new()
 	cam.far = 6000.0
@@ -106,6 +141,16 @@ func _world_aabb(root: Node) -> AABB:
 		else:
 			box = box.merge(b)
 	return box
+
+
+## Every [WorldEnvironment] in a subtree. See the block that calls it.
+func _environments(root: Node) -> Array[WorldEnvironment]:
+	var out: Array[WorldEnvironment] = []
+	if root is WorldEnvironment:
+		out.append(root as WorldEnvironment)
+	for child in root.get_children():
+		out.append_array(_environments(child))
+	return out
 
 
 func _meshes(n: Node) -> Array:

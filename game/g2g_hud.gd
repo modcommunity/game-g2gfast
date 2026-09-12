@@ -17,6 +17,12 @@ var _notice_until: float = 0.0
 var game: G2GGame = null
 var player_id: StringName = &"local"
 
+## How far up from the bottom the notice line starts, in pixels.
+##
+## The clock block's own margin is 92 and it draws about 90 tall, so anything below 182
+## is inside it. This is that plus a gap, in one place, so moving the clock moves this.
+const NOTICE_CLEARANCE := 196.0
+
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -86,12 +92,20 @@ func _ready() -> void:
 
 	# Things that just happened: a finish, a rank, a map change, a cvar an admin
 	# moved. Above the clock, where a player's eye already is.
+	#
+	# [b]Clear of the clock, and the number is derived from the clock rather than
+	# guessed.[/b] It sat at -160 and the clock block is 92 up from the bottom and about
+	# 90 tall, so a finish time was drawn straight through "0:00.000" — two numbers in
+	# the same font at the same size overlapping to the pixel, which reads as a font
+	# glitch rather than as a layout bug. Nothing could assert it: both Labels had the
+	# right text, the right size and the right anchors, and a rect that overlaps another
+	# rect is a legitimate rect. `tools/screenshot_hud.sh` found it on its first run.
 	_notice = _label("Notice", HORIZONTAL_ALIGNMENT_CENTER)
 	_notice.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	_notice.offset_left = -600.0
 	_notice.offset_right = 600.0
-	_notice.offset_top = -160.0
-	_notice.offset_bottom = -134.0
+	_notice.offset_top = -(NOTICE_CLEARANCE + 26.0)
+	_notice.offset_bottom = -NOTICE_CLEARANCE
 
 
 func _label(p_name: String, align: int = HORIZONTAL_ALIGNMENT_LEFT) -> Label:

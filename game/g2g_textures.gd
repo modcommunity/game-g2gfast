@@ -111,10 +111,21 @@ const SQUARES_PER_TILE := 4
 ## world — and the size of a square in the world is the only cue a player has for how
 ## fast the ground is going past them. Installing a texture set is allowed to change
 ## what the map looks like and is not allowed to change what it reads as.
+##
+## Eight is right, and it was re-measured after being doubted: `ramp.png` has lines on
+## rows 0, 128, 256, 384, 512, 640, 768, 896 and 1023 of 1024. The first pass at
+## measuring it found only 0, 256, 512, 768 and 1023 and concluded four, because the
+## lines alternate STRONG and FAINT — every 256 pixels they are 97 luma steps above the
+## field and every 128 they are ten. A threshold picked to ignore compression noise
+## ignores half the grid with it. Written down here because the wrong answer was
+## plausible, arithmetically tidy, and would have drawn every map at half scale.
 const INSTALLED_SQUARES_PER_TILE := 8
 
 ## Pixels per square in the generated tile.
 const PIXELS_PER_SQUARE := 128
+
+## Composited installed textures, by role. Built once — see [method installed_texture].
+static var _installed: Dictionary = {}
 
 ## Materials already built, by role. Built once and shared by every surface with that
 ## role in every map — a map is a few hundred boxes and a material per box would be a
@@ -170,18 +181,77 @@ static func material_for(role: Role) -> StandardMaterial3D:
 ## `.bsp` map is drawn through its own lightmapped shader, and it is the half of the
 ## game an installed set is for — see [constant TEXTURE_DIR].
 static func installed_texture(role: Role) -> Texture2D:
+	if _installed.has(role):
+		return _installed[role]
+
 	var path := "%s/%s" % [TEXTURE_DIR, ROLE_FILES.get(role, "floor.png")]
 
 	# ResourceLoader.exists rather than FileAccess.file_exists: an imported texture in
 	# an exported build is a `.ctex` beside a `.png` that is not shipped, so asking the
 	# filesystem for the source file answers "no" in exactly the build that matters.
-	if ResourceLoader.exists(path, "Texture2D"):
-		var loaded: Resource = ResourceLoader.load(path, "Texture2D")
+	if not ResourceLoader.exists(path, "Texture2D"):
+		_installed[role] = null
+		return null
 
-		if loaded is Texture2D:
-			return loaded as Texture2D
+	var loaded: Resource = ResourceLoader.load(path, "Texture2D")
+	if not (loaded is Texture2D):
+		_installed[role] = null
+		return null
 
-	return null
+	var checkered := _add_checker(loaded as Texture2D)
+	_installed[role] = checkered if checkered != null else loaded as Texture2D
+	return _installed[role]
+
+
+## The installed tile with the generated grid's checker composited onto it, or null if
+## its pixels could not be read.
+##
+## [b]The vendored set was invisible in play, and this is the whole reason.[/b] Kenney's
+## tile is a flat field with a ONE pixel line on a 128 pixel square: 1.4% to 3.5% of the
+## image is anything but the field colour, against 52% for [method grid_texture], which
+## draws a three pixel line on a 128 pixel square AND darkens alternate squares.
+##
+## Ink is the only thing that survives a mipmap. Every texture converges to its own
+## average with distance, so a tile that is 97% one colour IS that colour a few metres
+## away — and on a surf ramp, seen edge-on, which is the angle a surfer spends the whole
+## map at, it is that colour everywhere. Both imported maps rendered in flat orange and
+## flat grey and were reported, correctly, as having no textures on them at all. The set
+## was installed, loaded, scaled right and drawn on every surface it should have been.
+##
+## [method grid_texture]'s own comment had already worked this out and written it down:
+## "a pure grid on a ramp seen edge-on collapses to nothing between the lines; the
+## checker is what still carries speed at a glancing angle." The generated grid has one.
+## The installed set did not, and nothing compared them, because both are correct images
+## and the difference only exists once one of them is on a ramp forty metres away.
+##
+## So the checker is composited here rather than the files being replaced: every Kenney
+## pixel survives, the palette that tells a ramp from a wall is untouched, and the only
+## thing that changes is the part a mipmap keeps. Once per role, ever.
+static func _add_checker(texture: Texture2D) -> ImageTexture:
+	var source := texture.get_image()
+	if source == null:
+		return null
+
+	var image := Image.new()
+	image.copy_from(source)
+	# [b]An imported texture is VRAM-compressed in a real build[/b], and `set_pixel` on a
+	# compressed image is not a write to the image. One pass per role, once, ever.
+	if image.is_compressed() and image.decompress() != OK:
+		return null
+	image.convert(Image.FORMAT_RGBA8)
+
+	var cell_x := maxi(1, image.get_width() / INSTALLED_SQUARES_PER_TILE)
+	var cell_y := maxi(1, image.get_height() / INSTALLED_SQUARES_PER_TILE)
+
+	# The same 7% the generated grid darkens by, for the same reason and so that the two
+	# read as one set rather than as two.
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			if ((x / cell_x) + (y / cell_y)) % 2 == 0:
+				image.set_pixel(x, y, image.get_pixel(x, y).darkened(0.07))
+
+	image.generate_mipmaps()
+	return ImageTexture.create_from_image(image)
 
 
 ## The generated prototype grid: greyscale squares with a darker line every square and

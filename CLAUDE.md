@@ -44,6 +44,8 @@ game/
   g2g_bsp_map.gd    base for an IMPORTED map: mesh, materials and zones from a
                     manifest. See Decision 11
   g2g_bsp_lightmapped.gdshader  albedo x the lighting the map's own compiler baked
+  g2g_bsp_translucent.gdshader  the same, plus the ALPHA write. 20 surfaces of 420
+  g2g_lighting.gd   which DotLightProfile this machine gets. The rest is dot-lighting
   g2g_map_catalogue.gd  finds every map by looking. There is no list of maps
   g2g_stats.gd      every per-player number, declared once. See Decision 12
   g2g_awards.gd     achievements as rules over those ids
@@ -435,12 +437,13 @@ work either way; where it is drawn is the half a game is supposed to decide.
 godot --headless --path . --import
 godot --headless --path . --script tools/export_zones.gd
 godot --headless --path . res://examples/headless_run.tscn   # 135 checks
-godot --headless --path . res://examples/headless_presentation.tscn  # 38 checks
+godot --headless --path . res://examples/headless_presentation.tscn  # 51 checks
 godot --headless --path . res://examples/headless_net.tscn   # 90 checks
 godot --headless --path . res://examples/dedicated.tscn      # 121 checks
 godot --headless --path . res://examples/jitter_probe.tscn   # 4 configurations
 godot --headless --path . res://examples/headless_imported.tscn  # 25 per map, +1 per stage
 godot --headless --path . res://examples/headless_maps.tscn      # 24 checks
+godot --headless --path . res://examples/headless_stack.tscn     # 29 checks
 ```
 
 `headless_maps` is the one that says there is no list of maps anywhere: it removes a
@@ -489,6 +492,51 @@ avatar, a map change, a bot, and leaving.
 `dedicated` configures the server for **100** ticks in `server.cfg` — deliberately not
 the project's 128 — and checks the game and the timer count at 100, because a test
 using the same number at both ends would pass with the chain disconnected.
+
+
+## The player layer is reached, and third person here stays cosmetic
+
+`G2GPlayerStack` was built, installed and instantiated, and most of it was not *asked*
+anything. Three joins were made in one pass and each is a decision.
+
+**The spawn director chooses the start now, and the map is the fallback.** It had every
+track's start in it and `spawn_player` used the map directly beside it, so the director
+answered nothing for the life of a server. What it adds over the map is the per-site
+cooldown, the occupancy check and — with `sv_deathmatch` on — the protection window, which
+`DotSpawnProtection.grant` only ever opens from inside `DotSpawnDirector.choose`.
+
+**A start is per TRACK, which needed a condition dot-spawn did not have.**
+`MetaEquals` compares a site against a constant fixed when the condition was built;
+nothing compared one against the *request*. So a course whose every track starts somewhere
+else either built one director per track or picked the site itself — and picking it
+yourself is one line, which is what every game had done. `DotSpawnConditions.MetaMatchesRequest`
+is the addition, and `DotSpawnRequest.make` carries an `extra` dictionary for it.
+
+**The sites are checked against the loaded map rather than trusted to arrive in order.**
+`map_ready` and the respawn that follows a map change are not ordered, and losing that race
+means answering confidently from the previous map. See `docs/bugs-found.md`.
+
+**`sv_deathmatch` is what opens the protection window**, and it is shut on a pure timer
+server: there is nothing to be protected from, and a window with no attacker is a rule with
+no purpose. The duration is `G2GArsenal`'s own match rule rather than a second copy.
+
+### Third person stays `G2GCamera`'s, and does not become `DotTpsController`'s
+
+game-playground now runs dot-player-controller's third-person half over a
+`DotPlayerControllerSwitch`, and **this game deliberately does not.** Decision 3 already
+says why in one line: *third person is cosmetic.* `G2GCamera` flips between two cameras
+over **one motor**, so a run set in third person is comparable with one set in first.
+`DotTpsController` is a genuinely different motor — camera-relative input, its own
+acceleration, coyote time, a jump buffer — and a player who could switch to it mid-run
+would be setting a time on movement nobody else was using. On a records server that is not
+a feature, it is a leaderboard nobody can compare.
+
+### And the HUD can be looked at
+
+`tools/screenshot_hud.sh` renders the clock, the keys, the stage line and a notice.
+`tools/bsp_preview.sh` draws MAPS and this game had nothing that drew its interface — the
+only game in the family without one. Its first frame found a filed time drawn straight
+through the clock.
 
 ## Decision 5: the movement configuration travels, not the tunables
 
@@ -727,8 +775,8 @@ axis swap, because Source is Z-up and Godot is Y-up:
     godot = (src.x, src.z, -src.y)
 
 **START and END zones are read, not guessed — and where there is nothing to read they
-are written down by hand.** The paragraph that stood here said a CS:S map has no
-convention for a start and a finish that survives compilation. That is true of
+are written down by hand.** The paragraph that stood here said a map of this genre has
+no convention for a start and a finish that survives compilation. That is true of
 `surf_kitsune`, which really does drive its stages with
 `OnTrigger !activator,AddOutput,targetname X` and a filter chain, and it was false of
 five of the eight maps beside it, which carry `zone_start`, `map_end_zone`,
@@ -809,6 +857,8 @@ changes nothing there, which is the tell: ambient multiplies the albedo, and ten
 nearly nothing is nearly nothing. `surf_mesa` through the same path is a lit rock
 canyon.
 
+**Half of that has since turned out to be a bug after all, and the reasoning above is why it took so long to see.** Two of `surf_kitsune`'s black surfaces were the map and two were not, and the paragraph above could not tell them apart because it only ever asked whether the *albedo* was black. Its `grids_grid_*` panels are still exactly what it says — built black, on purpose, and they stay. Its `tools/toolsblack` panels are 1024x1024 pixels of flat zero with nothing in them at all, which is a missing texture wearing a correct decode, and they get the prototype set now. And every surface of every map, kitsune included, was being drawn in the transparent pass — see the ALPHA entry under *What building it found*. A map that is black for a stated good reason is the ideal place for a rendering bug to hide, because the explanation arrives before the question does.
+
 `tools/collision_probe.gd` is how any of this is checked. It drops the player's hull on
 every upward-facing triangle in a map and counts what it goes through, with `--trimesh`
 to build the old collider from the same data for comparison — **32.8% → 1.1% on
@@ -816,6 +866,28 @@ to build the old collider from the same data for comparison — **32.8% → 1.1%
 what is left on the first is water. It is a tool and not an assertion because the answer
 is a percentage of one map rather than a pass. The suite's own check — one bot, one
 spawn, still standing three seconds later — passed on all eight maps the entire time.
+
+**Solid is not the same question as rideable, and only the second one is what a surf map is.** `collision_probe` asks whether a surface holds a player up; nothing asked whether a player can *travel along* one, which is the entire activity. `tools/surf_probe.gd` sweeps the hull down the steepest line of every RAMP triangle and `tools/surf_run.gd` runs the real [DotFpsMotor] from one for four seconds. Both exist because a run that dies halfway down a ramp is invisible to every assertion here — the ramp is solid, the spawn is fine, the map is right in a screenshot, and the bot that stands on it for three seconds never moves.
+
+What they say about `surf_mesa`, which is the map the complaint came from:
+
+- **The slope rule is not the problem.** Zero of 13,086 simulated ticks reported grounded on a face steeper than `max_slope`, so a player is never *standing* on a ramp and friction is never applied to a ride. That was the first suspicion and it is wrong.
+- **2.4% of ramp sweeps stop dead against a face that opposes the travel**, and two thirds of those clear when the hull is lifted eight units — so they are obstructions standing proud of the ride, not walls the mapper drew across it.
+- **Roughly 40% of them are the displacement collider.** Rebuilding the map without it takes the dead stops from 98 to 58 out of 4000. That is the concave-shape warning three paragraphs up, arriving: a displacement is `ConcavePolygonShape3D`, which is loose triangles, and a hull sliding across one catches on the interior edges between them. `surf_mesa` is the worst case in the set — 183,552 displacement triangles and **zero** playerclip brushes, so nothing smooths the ride the way the other seven maps' clip brushes do.
+
+Not yet fixed, and the fix is not one line: a displacement grid would have to become convex geometry the way a brush does, which is 91,000 quads on this map and cannot be 91,000 shapes. The measurement is written down here so the next attempt starts from a number.
+
+**Second pass, with the real motor and a seeded sample, and the first pass's headline number was noise.** `tools/surf_run.gd` runs [DotFpsMotor] itself; `Array.shuffle()` uses the global RNG, so two runs sampled different triangles and a sweep over `max_slide_iterations` came out 5:1488, 8:2525, 12:1212, 16:619 — which reads as a result and is entirely which triangles got picked. Both probes seed now. **Every before-and-after in a tool that samples has to sample the same things, and a tool that does not say so will produce a trend on request.**
+
+What the seeded numbers say, over ~15,000 simulated ticks per map:
+
+- **The slide almost never fails.** Genuine wedges — iterations exhausted — are **1 tick on `surf_beginner2` and 0 on `surf_mesa`**. That was not visible before, because [member DotFpsMotor.stuck_ticks] counts the duplicate-plane early-out as well, and that path is the *intended* one. It reads 10% to 14% of ticks and is almost all the early-out. `ran_out` and `stopped_on_duplicate` are separate now; the counter that anybody would have reached for was reporting a working mechanism as a fault.
+- **What actually fires is the duplicate-plane break, on 1481 and 2219 ticks.** `_remember_plane` treats normals within 2.56 degrees as the same plane, which is right for one long ramp and is the exact shape of an imported one: **a curved ramp is not a surface here, it is a fan of convex hulls a degree apart**, so the second contact of nearly every tick is a near-copy of the first. The move then breaks with most of the tick's motion unspent, keeping the velocity. A player holding 900 u/s on the HUD and crawling up a ramp is that, and it is what was reported.
+- **The two maps fail for different reasons**, which is why one fix will not do. Rebuilt without the displacement collider, `surf_mesa` goes 2219 → 278 (87% of it is the terrain trimesh) and `surf_beginner2` goes 1482 → 1482, not one tick (all of it is brush hulls).
+
+Two things were tried against it and neither is kept. The classic 1.001 **overbounce** is genuinely missing — `_resolve_planes` clips with `Vector3.slide`, an exact projection, while its own acceptance test carries a `-1e-5` tolerance because "a direction exactly in a plane reads as entering it about half the time" — and adding it moved the count the wrong way by 2%. **Clipping and continuing** instead of breaking took `surf_mesa` from 2 runs carried to 7 and `surf_beginner2` from 0 to 2, and took stalls from 7 to 9. Both are changes to collide-and-slide in an addon five games share and the netcode predicts against; neither earned that on those numbers. The diagnosis is here and the decision is not this file's to make.
+
+**Two things the probes cost before they measured anything**, both in [docs/gdscript-hazards.md](../../docs/gdscript-hazards.md) now: `%g` is not a GDScript format specifier and a failed format returns the string unchanged rather than raising, so a probe printed its own placeholders; and `const X := PackedFloat32Array([...])` is not a constant expression, which fails at parse time with a message about constants rather than about packed arrays.
 
 **A track with a start and no end is dropped, and said so.** `surf_summit`'s third
 bonus has a start zone, eight checkpoints and no finish anywhere in the map. Left in,
@@ -890,6 +962,28 @@ without it.
   printed **19 passed, 0 failed**. `headless_imported` asserts its own check count for
   that reason, which is the guard this tree already knew it needed.
 
+- **One `ALPHA = base.a;` drew every imported map through itself, for as long as there have been imported maps.** Godot decides a spatial shader is transparent by whether it *writes* `ALPHA`, not by what it writes — so an unconditional write at the bottom of `fragment()` moved all 420 surfaces of all eight maps into the alpha pass, where depth is not written and geometry is sorted per surface instead of per pixel. What that looks like is not "the map is see-through": it is `surf_mesa`'s grey concrete floor reading as brown sand, because the terrain *behind* the floor was drawing in front of it, and half the map reading as black holes where a distant unlit surface won the sort. Every value involved was correct — the texture decoded, the UVs were right, the material was configured — and the only thing that could ever have found it is a person looking at a picture beside the original. `g2g_bsp_translucent.gdshader` is the ALPHA write now, on the 20 surfaces out of 420 whose own VMT said `$translucent` or `$alphatest`. The manifest had carried that flag since the importer learned to read a VMT and **nothing had ever read it**: this tree's own "a value produced correctly and consumed by nothing", for the fourth time, and the consumer that was missing is the one that would have made the write conditional.
+
+- **Dividing a lightmap by 255 reads as a conversion and is not one.** `c * 2**e` is already the linear value Source's own `TexLightToLinear` returns; 255 is the range of the *mantissa byte*, not of anything the number means. Over `Surf_Mesa`'s 1.9 million luxels the median linear value is **8.1** and the 99th percentile is **398** — so the divide put the median luxel at 0.03 and the map came out about three times too dark, with every surface the sun did not reach directly reading as a hole rather than as a shadow. No fixed divisor could have worked: p10 to p99 is a factor of five hundred and any linear scale that keeps the top from clipping crushes the middle to black. `lightmap_key` exposes each map against its own median instead, through a Reinhard curve that never clips — so a map exposes itself, which is what "a map is content" has to mean when the content is somebody else's compile.
+
+- **A texture that is flat black is a texture that is missing, and it decoded perfectly.** `tools/toolsblack` is 1024x1024 pixels of zero; so is `cs_italy/black`, and between them they cover **5.9 billion square units** of the eight maps. Drawn faithfully, that is indistinguishable from a load failure to anybody playing. They go to the prototype set now, by the same route as a texture that was never in the file, because "no texture" is what both of them are. The rule is flat **and** dark, not either: `grids/grid_white` is a black panel with one bright line — mean 12, deviation 30 — and it is most of what `surf_kitsune` is made of, so a rule keyed on darkness alone would repaint that whole map over a property it has on purpose.
+
+- **Kenney's prototype set was installed, loaded, scaled correctly, drawn on every surface it should have been, and invisible.** The report was "I still don't see any usage of kenney prototype textures", and the set was on screen the whole time. Its tile is a flat field with a ONE pixel line on a 128 pixel square: **1.4% to 3.5% of the image is anything but the field colour**, against 52% for `grid_texture`, which draws a three pixel line and darkens alternate squares. Ink is the only thing that survives a mipmap — every texture converges to its own average with distance — so a tile that is 97% one colour *is* that colour a few metres out, and on a ramp seen edge-on, which is the angle a surfer spends the whole map at, it is that colour everywhere. Two whole maps rendering in flat orange and flat grey, correctly.
+
+  `grid_texture`'s own comment had already worked this out and written it down — "a pure grid on a ramp seen edge-on collapses to nothing between the lines; the checker is what still carries speed at a glancing angle". The generated grid has a checker. The installed set did not, and nothing compared them, because **both are correct images and the difference only exists once one of them is on a ramp forty metres away**. The checker is composited onto Kenney's own pixels at load now, once per role: every pixel of theirs survives, the palette that tells a ramp from a wall is untouched, and the only thing that changes is the part a mipmap keeps.
+
+- **And the constant beside it is 8, was doubted, and is right.** Measuring the tile to check gave four — lines on rows 0, 256, 512, 768 and 1023 of 1024 — and four is wrong. The lines alternate STRONG and FAINT: every 256 pixels they are 97 luma steps above the field and every 128 they are ten, so a threshold chosen to ignore block-compression noise ignores half the grid with it. The wrong answer was plausible, arithmetically tidy, and would have drawn every imported map at half scale on the one number that constant exists to hold still. Written down because the measurement is the part that was hard, not the number.
+
+- **`tools/bsp_preview.sh`'s `ambient` and `light_boost` overrides had never changed a pixel.** The comment above them said to assign before `add_child`, because `_build()` runs from `_ready()`. It does not: `build_from` builds there and then, so every material already existed by the time either line ran and the assignment reached nothing. Two renders at different exposures came out **byte-identical**, which is the only reason it was noticed. The one tool in this repository whose entire job is to let a person look at the thing no assertion can see was silently ignoring half of what it was asked to show.
+
+- **Every spawn on a map is a place a player can be put, and exactly one of them was ever checked.** `headless_imported` asserts the MAIN spawn is somewhere a player can stand. `tools/spawn_check.gd` asks it of all of them — the per-track spawns and every zone destination a teleport can land on — and finds **36 points inside solid geometry across five maps**: 18 of 83 on `surf_beginner2`, 9 of 77 on `surf_summit`, 5 of 70 on `surf_aquaflow` including its **main spawn**, 4 of 174 on `surf_kitsune`, and none on `surf_mesa`. A player put inside a brush is stuck there until they find the respawn key, and the map is perfect from every other angle — which is how this arrived, as "I get stuck when I spawn".
+
+  **An overlap test alone proves nothing, and two probes were built on one before this was noticed.** Shapes have collision margins, so a capsule resting a millimetre above a floor overlaps it: "is the player in solid" answers yes for everybody standing anywhere, and a bhop probe built on it reported 70% to 75% of runs broken and **did not move when the motor was changed**. What separates a real bad spawn from a margin is how far up it takes to get clear — `surf_aquaflow`'s main spawn is clear only 64 units up, against a 72-unit player, and that number is not a margin.
+
+  `floor_of` is one cause and is fixed: it returned `box[0][2]`, the bottom of the trigger VOLUME, and a mapper sinks a trigger into the ground on purpose so nobody can walk under its edge. It is not the only cause — a `destination` is wherever the mapper put an entity — so the lift is applied to every route rather than to that one.
+
+  **And the lift cannot see displacements, which is where `surf_aquaflow`'s spawn actually is.** A brush is half-spaces and a point test against it is exact; a displacement is welded triangles with no inside. So `lift_out_of_solid` looks at a spawn buried in the reef and correctly reports it clear, and the 36 stand. The answer is almost certainly not in the importer at all: the game has a physics world, and one shape query per spawn at map load settles brushes and terrain alike in the one place that knows about both.
+
 ### What importing the other six found
 
 The importer had been run on two maps. Running it on the eight in
@@ -953,6 +1047,37 @@ and each `!s<n>` destination and waits to see whether they are still there. Thos
 are what say these are levels rather than geometry, and writing them found the
 `Surf_Mesa` spawn above and two more artefacts of stepping a timer by hand.
 
+### Decision 13: a map says how it is lit, and that was being thrown away
+
+Every one of these `.bsp` files carries its own lighting in the entity lump, and the importer read the geometry, the collision, the zones, the spawns and the baked lightmap and left all of it there. `light_environment` has the sun's pitch, yaw, colour and compiled brightness and a separate ambient colour; `env_fog_controller` has the fog's colour and range; `worldspawn` names the sky; `sky_camera` describes the 3D skybox. So every imported map was drawn under one hardcoded sun at (-55, -35) against one flat blue-grey background — `Surf_Mesa`, which asks for a low warm sun at -28 degrees in 235/222/177 with pale cyan fog from 5000 units, and `surf_beginner2`, which asks for one straight overhead in 255/211/168 with no fog at all, **came out looking like the same room**.
+
+`lighting_of` writes it into the manifest and **dot-lighting** applies it — `DotLightDocument.from_dictionary` over the block, `DotLightRig.apply` over the world. [G2GLighting] is forty lines of caller now, and the one decision it keeps is which `DotLightProfile` a machine gets: `web()` in a browser, which drops shadows and keeps glow. That is doubly right here — a surf map is a large open volume, so the shadow pass costs the whole canyon, while the glow is what makes a neon strip read as a light, and a neon strip is how one of these maps signposts the route. Four things about that are worth keeping:
+
+- **The sun lights the characters and not the world, and that is correct.** An imported map's surfaces are `unshaded` because the baked lightmap *is* their lighting. What changes how the world looks is the post-processing — the tone map, the fog, the glow and the colour behind everything — and those four are most of the difference between this and the engine these maps were built for.
+- **The tone map is the largest single change and it costs nothing.** Godot defaults to `LINEAR`, which is not a tone map, it is a clip. The engine these came from ran a filmic curve, and the shoulder on it is why a bright sky and a dark rock face can both be readable in one frame.
+- **The glow threshold is under 1.0 on purpose.** The lightmap atlas is an 8-bit sRGB PNG tone-mapped at import, so nothing in an imported map is ever above white; an HDR threshold would find nothing to bloom, on any map, for ever. The neon strips a surf map is signposted with sit near the top of that range, and this is what lets them read as light rather than as paint.
+- **`_light`'s fourth number is not a multiplier on the first three.** It is the intensity the map's own compiler was given and it runs from 20 to 600 across these eight maps, so feeding it to `light_energy` gives a sun six hundred times too bright on one map and twenty times on the next. It is a ratio against a reference, soft-curved, because the range is two orders of magnitude.
+
+**Calibrated against a reference frame — see Decision 14.** What follows was written before that and is kept because both cases are still real. `surf_aquaflow`'s fog is cyan at full density by 8536 units, which is exactly what the map says and makes an orbit preview one flat teal rectangle — correct, and a reminder that a preview outside the map is not a view a player has. And that map is 98% prototype-textured, where PLATFORM is Kenney's *Light* tile at a mean of 213, so a filmic curve over a map made almost entirely of near-white tiles is a white-out. Neither is the lighting being wrong; both are the lighting being applied faithfully to something else that needs a pass.
+
+### Decision 14: the lighting was being flattened three times before it reached the screen
+
+Decision 13 read a map's lighting and applied it. It still looked nothing like the engine these maps were built for, and the reason turned out to be measurable rather than a matter of taste. A reference frame of one of these maps as its own engine draws it spans a **linear luminance ratio of 303:1** between its fifth-percentile pixel and its ninety-fifth. The same view of our import spanned **7.9:1**. That single number is the whole of "why does theirs look so much better": a cave lit by one warm lamp was coming out as an evenly grey room, and no amount of correct geometry, correct textures or correct sun angle was going to change it.
+
+Three things were compressing it, and only the third was interesting.
+
+**The atlas encode was a tone map, and a tone map has no business there.** `build_lightmap` wrote Reinhard, `v / (v + median)`. Reinhard is a *display* operator: it takes a finished image to a displayable range. This atlas is not a finished image, it is a light term that still has to be multiplied by an albedo — and Reinhard compresses ratios everywhere, including the midtones where everything readable in a map lives. It is now expose, clip, gamma: divide by a white point, clip the top, write through 2.2. Every ratio below the clip survives exactly, because **gamma encoding is already the compression an 8-bit image needs** and a 500:1 linear range is what sRGB was designed to carry. Atlas contrast went from 3.5:1 to 226:1.
+
+**The white point has to be a statistic an outlier cannot move.** Dividing by the 99th-percentile luxel is the obvious reading of "use the range" and it hands a whole map's exposure to its brightest few luxels: `Surf_Mesa` exposed perfectly and `surf_beginner2` — dim, with a handful of bright sources — went almost black. Anchored on the **median** instead, every map in the set lands in the same midtone and clips between 0% and 3.4%. That percentage is printed per map at import now, because it is the one number that says whether a map's exposure is sane.
+
+**And two thirds of the map's triangles were reading their lighting from the wrong place.** A displacement is a flat quad plus a grid of offsets, and its lightmap is parameterised over **the quad**, not over the terrain that came out — the luxel extents say so plainly, being 12x12 or 7x12 where the displacement grid is always 9x9. The importer projected the *displaced* point through the face's lightmap axes, which overshoots the luxel range by however far the terrain bulges, and the clamp then parks whole hillsides on one edge luxel. Displacements are 67% of `Surf_Mesa`. They rendered as smooth bright gradients with no shadow anywhere, which is indistinguishable from a map that is simply lit flatly — and every check passed, because the atlas was right, the UVs were in range and the geometry was in the right place. Projecting the flat point moved the rendered median from 191 to 49 against an atlas median of 47. **The tell was that mismatch: a lightmap that renders nothing like its own histogram is being sampled somewhere other than where it was written.**
+
+End to end, the same view went from 7.9:1 to **87:1**, with the median at 31 against the reference's 15.
+
+**The tool that was supposed to catch all of this was lying.** `tools/bsp_preview.gd` builds its own neutral `WorldEnvironment` so a diagnostic render shows the map and nothing else — and added it beside the one the map now brings. A second `WorldEnvironment` does not merge and does not warn at runtime; one is simply used. Every render it had ever made was drawn under the map's own tone map, fog and glow while the code said otherwise. It removes the map's by name now and prints which it used, and takes `keepenv` for the question it could not otherwise answer.
+
+**The sky is drawn from the map's own numbers.** `sky_name` names a texture set that lives inside the game these maps were authored for, is not in the file, and is not ours to copy. dot-lighting builds a procedural sky instead: the fog colour as the horizon, the ambient as the top, the sun at the map's own angle. A flat rectangle in the fog colour — what stood here before — is a blown highlight the moment the world around it is exposed correctly.
+
 ### What is not imported
 
 - **Static props.** `Surf_Mesa` carries 17 `.mdl` models in its pakfile and the
@@ -961,10 +1086,11 @@ are what say these are levels rather than geometry, and writing them found the
   player touches is all brushes and displacements, and that is all this reads.
 - **Skyboxes, water, animated and scrolling materials.** Sky faces are skipped, so an
   imported map has the viewport's background behind it.
-- **Anything from the game's own VPKs.** A `.bsp` embeds only what the mapper added:
-  84% of `surf_kitsune`'s triangles and 91% of `Surf_Mesa`'s. The rest — CS:S stock
-  textures like `concrete/concretefloor039a`, which is the ramp — are painted with the
-  [G2GTextures] role colour instead, which is what an untextured surface means here.
+- **Anything from the source game's own archives.** A `.bsp` embeds only what the mapper
+  added: 84% of `surf_kitsune`'s triangles and 91% of `Surf_Mesa`'s. The rest — the stock
+  texture library, which on these maps includes the ramp itself — is drawn in the
+  [G2GTextures] prototype set instead, chosen by what the surface is FOR, which is what
+  an untextured surface means here.
 
 **These maps are third-party work.** `godot/inspirations/` is read-only reference in
 the shape `external-study/` already has: reading a map for its dimensions, its ramp
@@ -1198,17 +1324,11 @@ including the unknown one, and its prefixes are `["!", "/"]` — identical to
 module's own `_` branch said "left for dot-server's own chat commands", which was true
 for `!r`, `!wr` and `!top` and quietly false for the two this game added later.
 
-**`g2g_map` is console-only on purpose and `examples/dedicated.gd` asserts it** —
-`not map_command.chat_allowed`, in so many words. It is the only command in its block
-without `.with_chat()`, which reads exactly like an oversight and is not: a map change
-destroys every run in progress, so a records server does not let a player do that by
-typing. It goes through the console, RCON, or the vote.
+**`g2g_map` is the only command in its block without `.with_chat()`, and it is reachable from chat anyway.** It carries `CHANGEMAP` instead, and the flag is what answers — `examples/dedicated.gd` asserts that now, where it used to assert `not map_command.chat_allowed`.
 
-That assertion earned its keep: it caught the flag being added and the suite went to
-120/1 on the spot. **A missing flag its neighbours have is evidence of nothing until you
-have checked whether a suite asserts the difference.** A command relayed from the website
-arrives as `Source.CHAT` and is refused here too; `DotChatRelayConfig.command_source` is
-the switch for an operator who wants their site admins to reach it.
+The old assertion was written on sound reasoning — a map change destroys every run in progress, so a records server does not let a player do that by typing — and it was enforcing that reasoning in the wrong place. The chat check ran before the permission check and never asked who was typing, so the person it actually stopped was the operator holding `changemap`, typing `/map surf_beginner` into the chat box already in front of them. A player without the flag is refused either way, by the check that was always doing the work. `sv_chat_commands 0` puts the old behaviour back server-wide, and `allow_chat_change = false` on the dot-map block puts it back for the map change alone.
+
+The episode is still worth the paragraph it takes: **a missing flag its neighbours have is evidence of nothing until you have checked whether a suite asserts the difference.** That assertion caught the flag being added once and sent the suite to 120/1 on the spot. What it could not tell anybody is whether the difference it was defending was the right one.
 
 ## The presentation layer, and the sentence every decision in it comes from
 
@@ -1238,6 +1358,26 @@ The two consoles share names that mean opposite things — `!s3` on a client is 
 navigation and on a server is a teleport that ends a run — and an unprefixed remote console
 is how somebody types something meant for their own client and loses the run they were
 three stages into.
+
+## The chat box, and a run nobody may lose to a keystroke
+
+This game could be talked to and could not talk back: `DotChatClient` held the history, the HUD drew the notice, and no key opened anything to type in. It is dot-ui's `DotChatWindow` now, built by `G2GPresentation` beside the console, in the bottom-left corner — which is free here because the clock and the key display are along the bottom centre and the status line is along the top.
+
+Three settings decide it, all `ACCOUNT`-scoped for the reason the sensitivity is: a runner who found their key once should never have to find it again.
+
+| | |
+| --- | --- |
+| `chat_window` | `auto` / `on` / `off`. `auto` hides the box on a server already carrying chat somewhere the player can see it; `on` draws it regardless, which is how a relayed server and an in-game box run at once; `off` never does. |
+| `chat_open_key` | `Y` by default. |
+| `chat_team_key` | `U` by default. |
+
+The log keeps drawing what other people said in all three cases. Off means "you type somewhere else", never "you are out of the conversation".
+
+**`G2GPresentation.swallows_input()` covers the box, and `DotFpsSampler.suspended` is set beside it — and on a timer server the second one is the expensive half.** `swallows_input` keeps typed keys out of `_unhandled_input`; it can do nothing about `Input.is_action_pressed`, which is polled off the device every physics frame and does not care what consumed an event. A client that keeps reading movement while somebody types does not merely walk them into a wall here, it strafes them off a ramp and ends a run they have been building for minutes. **Nobody may lose a personal best by saying "gg".**
+
+`auto` is answered by the server, because only the server can answer it: `G2GServices` points `DotChatManager.watch_relay` at the relay it built, and `G2GClientExtras` turns the payload that arrives into `chat_relay_changed`.
+
+**And every line this game drew was blank until dot-chat was fixed.** `receive_wire` handed dot-server's `{kind, userid, name, text, admin}` to `DotChatClient.receive` expecting a refusal; `DotChatMessage.from_dictionary` defaulted every field, so it parsed as a valid message with no text and no sender, and the fallback underneath — the one that actually draws chat here — had been unreachable since it was written.
 
 ## A practice session taints every run in it
 

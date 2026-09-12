@@ -26,6 +26,16 @@ extends Node
 
 const CHANNEL := "g2g.client.extras"
 
+## A chat line arrived, with the speaker and what they said kept apart.
+##
+## [b]Separate from [signal line_received], which flattens them.[/b] A chat box draws the
+## name in one colour and the text in another, and a signal that has already joined them
+## with a colon is a signal a window has to take back apart.
+signal said(speaker: String, text: String, kind: String)
+
+## What is carrying this conversation changed. See [code]DotChatManager.chat_state[/code].
+signal chat_relay_changed(relayed: bool)
+
 ## A chat line arrived and should be drawn.
 signal line_received(text: String)
 
@@ -98,6 +108,7 @@ func _build_chat() -> void:
 
 	chat.message_received.connect(
 		func(message: DotChatMessage, _channel: StringName) -> void:
+			said.emit(message.sender_name, message.text, message.kind_name())
 			line_received.emit(message.describe())
 	)
 
@@ -120,21 +131,34 @@ func _build_chat() -> void:
 ## Found by the family's own detector: a public method whose name occurs once in its
 ## repository is a method nothing calls.
 func receive_wire(payload: Dictionary) -> void:
-	if chat == null:
-		line_received.emit(str(payload.get("text", "")))
+	# Not a line at all: the server saying what is carrying chat. It arrives before the
+	# first line does, so the client can decide whether to draw a box rather than drawing
+	# one and taking it away a moment later.
+	if str(payload.get("kind", "")) == "state":
+		chat_relay_changed.emit(bool(payload.get("relay", false)))
 		return
 
-	var taken := chat.receive(payload)
+	if chat != null:
+		var taken := chat.receive(payload)
 
-	if taken.ok:
-		# `message_received` fires from inside `receive`, so the line has already
-		# been emitted. Returning is what stops it being drawn twice.
-		return
+		if taken.ok:
+			# `message_received` fires from inside `receive`, so the line has already
+			# been emitted. Returning is what stops it being drawn twice.
+			return
 
 	# Not a shape `DotChatClient` knows. dot-server's own chat manager sends a simpler
 	# payload than dot-chat's wire, and a server running WITHOUT dot-chat sends only
 	# that — so this is the other deployment rather than a failure path.
-	line_received.emit(str(payload.get("text", payload.get("message", ""))))
+	#
+	# [b]It used to be unreachable, and that is what made every line in this game blank.[/b]
+	# `DotChatMessage.from_dictionary` gave every key a default, so dot-server's payload
+	# parsed as a valid message with no text, no sender and no channel — `receive` returned
+	# ok and this never ran. dot-chat refuses a dictionary with no `m` now.
+	var speaker := str(payload.get("name", ""))
+	var text := str(payload.get("text", payload.get("message", "")))
+
+	said.emit(speaker, text, str(payload.get("kind", "all")))
+	line_received.emit(text if speaker == "" else "%s: %s" % [speaker, text])
 
 
 # --- Voice -----------------------------------------------------------------

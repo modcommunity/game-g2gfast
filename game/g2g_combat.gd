@@ -117,12 +117,39 @@ func _build_combat() -> DotResult:
 
 	add_child(manager)
 
+	# AFTER add_child: `DotCombatManager.setup` runs from `_ready` and that is what builds
+	# the resolver, so assigning the hook beforehand writes to nothing. game-arena's
+	# combat build carries the same warning for the same reason.
+	#
+	# [b]The spawn window, asked at the one point every hit goes through.[/b] `health`
+	# already refuses inside its own window, and this is the gate that makes dot-spawn's
+	# ledger mean something: it is granted per respawn in `_on_respawn_due`, drained by
+	# `DotSpawnProtection.advance` every tick, and until this line nothing ever asked it a
+	# question. A veto applied at the damage sites instead would be one applied at the
+	# sites somebody remembered.
+	manager.resolver.adjust = _adjust_damage
+
 	for type in G2GArsenal.damage_types():
 		manager.register_damage_type(type)
 
 	manager.entity_killed.connect(_on_entity_killed)
 
 	return DotResult.success(manager)
+
+
+## Refuses a hit on somebody inside their spawn window.
+##
+## Self damage and world damage are not blocked, and neither decision is made here:
+## [DotSpawnProtection.blocks] answers about the pair precisely so that a protected
+## player who rocket-jumps or falls into a pit still takes it.
+func _adjust_damage(damage: DotDamage) -> void:
+	if damage == null or game.player_stack == null:
+		return
+
+	if game.player_stack.blocks_damage(
+		str(damage.attacker), str(damage.victim), damage.tick, damage.is_world_damage()
+	):
+		damage.refuse("spawn protection")
 
 
 func _build_match() -> DotResult:
@@ -543,13 +570,37 @@ func _on_respawn_due(key: String, spawn: DotSpawnPoint, tick: int) -> void:
 
 	var health: DotHealth = kit["health"]
 	health.spawn_protection_ticks = match_node.spawn_protection_ticks()
+
+	# The class's numbers, before the reset — `reset` sets health to `max_health`, so
+	# raising the maximum afterwards leaves a "full" player on the old class's number.
+	if game.player_stack != null:
+		game.player_stack.apply_class_numbers(
+			key, health, player.controller.tunables, player.base_tunables
+		)
+
 	health.reset(tick)
 
 	# Through the game's own respawn, not by writing a position: `spawn_player`
 	# abandons the run, puts the player on the start pad and resets the timer, and a
 	# death that left a run going would be a run with a gap in it.
 	if spawn != null:
-		player.teleport(spawn.spawn_transform().origin)
+		# [b]The director among the same starts, and dot-match's point as the
+		# fallback.[/b] Both read the map's own track starts — `_on_map_ready` above
+		# registers them with dot-match and `G2GPlayerStack.refresh_spawns` copies them
+		# into the director — so this is a better choice among one set rather than a
+		# second set. It is also the only call that grants the protection window whose
+		# ticks were written into `health` four lines up, because
+		# `DotSpawnProtection.grant` runs inside `choose` and nowhere else.
+		var at := spawn.spawn_transform().origin
+
+		if game.player_stack != null:
+			var track := player.timer.track if player.timer != null else DotTimerTrack.MAIN
+			var chosen := game.player_stack.choose_start(player_id, track)
+
+			if chosen.ok:
+				at = (chosen.value as DotSpawnChoice).transform.origin
+
+		player.teleport(at)
 	else:
 		game.spawn_player(player_id)
 

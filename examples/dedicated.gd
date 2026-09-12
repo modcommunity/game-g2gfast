@@ -279,8 +279,21 @@ func _test_query_and_chat() -> void:
 	for name in ["r", "wr", "top", "style", "track", "rtv", "g2g_restart"]:
 		var command: DotConCommand = server.console.find_command(name)
 		_check(command != null and command.chat_allowed, "!%s works from chat" % name)
+	# It used to read "and changing the map does not", and that was a refusal pointed at the
+	# operator holding CHANGEMAP rather than at a player: the chat gate ran before the
+	# permission check and never asked who was typing. What the flag refuses, it refuses on
+	# every source alike; what `sv_chat_commands` decides is only whether typing is a way in.
 	var map_command: DotConCommand = server.console.find_command("g2g_map")
-	_check(map_command != null and not map_command.chat_allowed, "and changing the map does not")
+	_check(
+		map_command != null
+			and map_command.permission == DotAdminFlags.CHANGEMAP
+			and map_command.allows_chat(server.console.chat_commands_are_open()),
+		"and changing the map does too, for whoever holds changemap"
+	)
+	_check(
+		server.console.chat_commands_are_open(),
+		"because sv_chat_commands ships on"
+	)
 
 	# dot-map owns the plain name now. dot-server's `map` changed the GAME, which on a
 	# timer server running one game and a hundred maps was the wrong operation every time
@@ -288,8 +301,17 @@ func _test_query_and_chat() -> void:
 	var plain_map: DotConCommand = server.console.find_command("map")
 	_check(plain_map != null, "`map` is registered, and it is dot-map's")
 	_check(
-		not plain_map.chat_allowed,
-		"and carries the same policy as g2g_map: a map change destroys every run in progress"
+		plain_map.chat_policy == DotConCommand.ChatPolicy.DEFAULT
+			and plain_map.allows_chat(server.console.chat_commands_are_open()),
+		"and carries the same policy as g2g_map: the permission decides, not the prefix"
+	)
+	# The knob that puts the old behaviour back, checked rather than described: an operator
+	# who wants a map change to cost a trip to the console has one line of config for it.
+	var closed := DotConCommand.new("probe", func(_c: Variant) -> void: pass)
+	closed.no_chat()
+	_check(
+		not closed.allows_chat(true),
+		"and no_chat() outranks the server-wide default, for a deployment that wants that"
 	)
 	var plain_maps: DotConCommand = server.console.find_command("maps")
 	_check(plain_maps != null and plain_maps.chat_allowed, "while listing them from chat is fine")

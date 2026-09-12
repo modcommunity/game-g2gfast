@@ -92,6 +92,7 @@ func _ready() -> void:
 	presentation.client = self
 	add_child(presentation)
 	DotLog.result("g2g.client", "the presentation layer", presentation.setup())
+	_wire_chat_window()
 
 	if _offline:
 		for _i in range(60):
@@ -269,6 +270,15 @@ func _build_netcode() -> DotResult:
 			hud.notice(text)
 	)
 
+	extras.said.connect(_on_said)
+
+	# What the server says is carrying chat. It decides whether the box is drawn at all
+	# when the player's setting is `auto`.
+	extras.chat_relay_changed.connect(func(relayed: bool) -> void:
+		if presentation != null:
+			presentation.set_chat_relayed(relayed)
+	)
+
 	# [b]Where chat actually arrives.[/b] `G2GServices` routes a line through dot-chat
 	# and then hands it to dot-server's manager to put on the wire, so on this end it
 	# lands on `DotClientLink.chat_received` — not on anything dot-chat owns. Without
@@ -299,6 +309,64 @@ func _build_netcode() -> DotResult:
 			return float(maxi(0, int(link.call("ping_ms"))))
 
 	return net.start()
+
+
+# --- Chat ------------------------------------------------------------------
+
+## Joins the chat box to the two things it needs: a way out, and a way to stop the runner.
+##
+## [b]The sampler is the half that is easy to forget, and on a timer server it is the
+## expensive one.[/b] `swallows_input` keeps typed keys out of `_unhandled_input`, but
+## movement here is POLLED — `DotFpsSampler.sample` reads the device every physics frame
+## and does not care what consumed an event. Without `suspended`, typing during a run
+## strafes the player off a ramp and ends it.
+func _wire_chat_window() -> void:
+	var window: DotChatWindow = presentation.chat_window if presentation != null else null
+
+	if window == null:
+		return
+
+	window.submitted.connect(_on_chat_submitted)
+
+	window.opened.connect(func(_channel: StringName) -> void:
+		if _sampler != null:
+			_sampler.suspended = true
+	)
+
+	window.closed.connect(func() -> void:
+		if _sampler != null:
+			_sampler.suspended = false
+	)
+
+
+## What a player typed, on its way to the server.
+##
+## Nothing is filtered here: the server decides what a line may contain and its answer is
+## the only one that counts.
+func _on_chat_submitted(text: String, channel: StringName) -> void:
+	if _offline:
+		# Offline there is no server to decide anything, so the line goes straight to the
+		# log. Saying nothing would read as a chat box that does not work.
+		if presentation != null and presentation.chat_window != null:
+			presentation.chat_window.add_said("You", text, Color(0.62, 0.78, 1.0))
+		return
+
+	if link != null and link.has_method("send_chat"):
+		link.send_chat(text, channel == &"team")
+
+
+## A line somebody said, in the chat box, with the name drawn apart from the text.
+func _on_said(speaker: String, text: String, kind: String) -> void:
+	if presentation == null or presentation.chat_window == null:
+		return
+
+	var speaker_colour := Color(0.55, 0.85, 0.60) if kind == "team" else Color(0.62, 0.78, 1.0)
+
+	if speaker == "":
+		presentation.chat_window.add_text(text, Color(0.80, 0.82, 0.86))
+		return
+
+	presentation.chat_window.add_said(speaker, text, speaker_colour)
 
 
 func _on_hello(player_id: int) -> void:

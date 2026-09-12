@@ -46,6 +46,22 @@ import vtf  # noqa: E402
 
 LUMP_LIGHTING, LUMP_PAKFILE, LUMP_PLANES = 8, 40, 1
 ATLAS_W = 1024
+
+# Where a map's MEDIAN luxel lands, as a linear value. See build_lightmap.
+#
+# [b]Anchored on the median rather than on a high quantile, and that is the robust half
+# of the exposure.[/b] Setting the white point to the 99th percentile is the obvious
+# reading of "use the range", and it hands the exposure of the whole map to whatever its
+# brightest few luxels are: `surf_mesa` has a sky and a sane spread and exposed fine,
+# `surf_beginner2` has a handful of very bright sources over an otherwise dim map and
+# rendered almost black, because its p99 was an outlier rather than its top end. The
+# median is a statistic an outlier cannot move.
+#
+# 0.023 is a code value of about 47 in the sRGB atlas, which is where surf_mesa's median
+# sat when it was exposed to its own p99 and rendered against a reference frame. It is a
+# level, not a curve: the scale below is linear, so every ratio in the map is the same
+# whatever this number is, and changing it moves the whole map up or down together.
+EXPOSURE_MEDIAN_TARGET = 0.023
 LM_PAD = 1
 
 # The least a zone volume may measure on any axis, in genre units.
@@ -162,9 +178,17 @@ def extract_textures(pak, materials, tex_dir):
     """Decode every referenced texture the map carried with it.
 
     Returns {material: (png filename or None, translucent)}. A material whose texture
-    lives in the game's own VPKs -- `concrete/concretefloor039a` is CS:S stock -- is
+    lives in the source game's own archives -- `concrete/concretefloor039a` is stock -- is
     not an error and not a guess: it comes back None and the map script paints it with
-    the g2gfast role colour instead.
+    the prototype set instead, keyed by what the surface is FOR.
+
+    [b]A texture that is flat black comes back None too.[/b] It decodes, it is the
+    right size, and it is 1024x1024 pixels of nothing -- `tools/toolsblack` and
+    `cs_italy/black` between them cover 5.9 billion square units of the eight maps.
+    Drawn faithfully that is a hole in the map as far as anybody playing can tell, and
+    the whole reason the prototype set exists is to stand in for a surface there is no
+    picture of. Having one and having a black one are the same situation. See
+    [method vtf.is_blank] for why the rule is flat-and-dark rather than just dark.
     """
     os.makedirs(tex_dir, exist_ok=True)
     out, written = {}, {}
@@ -182,13 +206,20 @@ def extract_textures(pak, materials, tex_dir):
             out[mat] = (None, translucent)
             continue
         if base in written:
-            out[mat] = (written[base], translucent)
+            # None here is a texture already found to be blank, not one never seen:
+            # `written` is keyed by base texture and a second material pointing at the
+            # same blank one has to reach the same answer, translucency included.
+            out[mat] = (written[base], translucent if written[base] else False)
             continue
         name = base.replace("/", "_") + ".png"
         try:
             w, h, px = vtf.decode(raw)
         except ValueError:
             out[mat] = (None, translucent)      # HDR cubemaps and other oddities
+            continue
+        if vtf.is_blank(px):
+            out[mat] = (None, False)
+            written[base] = None
             continue
         opaque = not translucent and vtf.is_opaque(px)
         vtf.write_png(os.path.join(tex_dir, name), w, h, px, opaque=opaque)
@@ -198,6 +229,29 @@ def extract_textures(pak, materials, tex_dir):
 
 
 # --------------------------------------------------------------- lightmap ----
+def lightmap_quantile(light, lit, q, stride=7):
+    """The q-th quantile of a map's lit luxel luminances, in Source's linear units.
+
+    Sampled rather than counted in full -- a big map has two million luxels and every
+    one of them costs a Python loop -- and every seventh is plenty for a quantile that
+    only has to be right to within a stop. Falls back to 1.0 for a map with no lighting
+    at all, which makes the exposure below a no-op rather than a divide by zero.
+    """
+    vals = []
+    for f in lit:
+        o, w, h = f[9], f[13] + 1, f[14] + 1
+        end = o + w * h * 4
+        for t in range(o, min(end, len(light) - 3), 4 * stride):
+            e = light[t + 3]
+            scale = 2.0 ** (e - 256 if e > 127 else e)
+            vals.append((light[t] * 0.2126 + light[t + 1] * 0.7152
+                         + light[t + 2] * 0.0722) * scale)
+    if not vals:
+        return 1.0
+    vals.sort()
+    return max(vals[min(int(q * (len(vals) - 1)), len(vals) - 1)], 1e-6)
+
+
 def build_lightmap(bsp, faces, path):
     """Pack every lit face's luxels into one atlas and return its placements.
 
@@ -205,6 +259,35 @@ def build_lightmap(bsp, faces, path):
     luxel can be far brighter than white, which is the point: it is light, not a
     colour. It is tone-mapped down here rather than in the shader so the atlas is an
     ordinary sRGB PNG that Godot imports with no special handling.
+
+    [b]Exposed and gamma-encoded, and NOT tone-mapped. A tone map here is the bug.[/b]
+    Two encodings stood here before this one and both were wrong in the same place.
+    `v = min(1, c * 2**e / 255)` divided by the range of the MANTISSA byte rather than
+    by anything the number means, and put the median luxel at 0.03. Reinhard,
+    `v / (v + key)` against the map's own median, replaced it and fixed the darkness --
+    but Reinhard is a DISPLAY operator and this is not a display, it is a light term
+    that still has to be multiplied by an albedo. It compresses ratios everywhere,
+    including the midtones where every readable thing in a map lives.
+
+    That was measured against a reference frame of one of these maps as its own engine
+    draws it. The reference spans a linear luminance ratio of 303:1 from its darkest
+    fifth-percentile pixel to its brightest ninety-fifth; the same view of our import
+    spanned 7.9:1. A cave lit by one warm lamp came out as an evenly grey room. Nothing
+    about the geometry, the textures or the albedo was wrong -- the light had simply had
+    its contrast removed before it ever reached the shader.
+
+    So: expose, clip, encode. Linear light is divided by the map's own
+    [code]EXPOSURE_QUANTILE[/code] luxel so that the bright end lands at white, anything
+    above that clips -- which the source engine also does, since its overbright range is
+    finite too -- and the result is written through gamma 2.2. **Every ratio below the
+    clip survives exactly**, which is the entire point: gamma encoding is already the
+    compression an 8-bit image needs, and a 500:1 linear range is what sRGB was designed
+    to carry. The atlas is still an ordinary sRGB PNG that Godot imports with no special
+    handling, and `source_color` on the sampler undoes the gamma on the way back to
+    linear, so the shader multiplies an honest light value by an honest albedo.
+
+    Each map still exposes itself against its own light, which is what "a map is
+    content" has to mean when the content is somebody else's compile.
     """
     light = bsp._lump(LUMP_LIGHTING)
     lit = [f for f in faces if f[9] >= 0 and (f[9] + 4) <= len(light)]
@@ -232,7 +315,10 @@ def build_lightmap(bsp, faces, path):
             p = (j * ATLAS_W + i) * 4
             atlas[p] = atlas[p + 1] = atlas[p + 2] = 255
 
+    white = lightmap_quantile(light, lit, 0.5) / EXPOSURE_MEDIAN_TARGET
     inv_gamma = 1.0 / 2.2
+    clipped = 0
+    total = 0
     for f in lit:
         px, py = place[id(f)]
         w, h = f[13] + 1, f[14] + 1
@@ -244,13 +330,20 @@ def build_lightmap(bsp, faces, path):
                 if q + 3 >= len(light):
                     continue
                 e = light[q + 3]
-                s = (2.0 ** (e - 256 if e > 127 else e)) / 255.0
+                s = 2.0 ** (e - 256 if e > 127 else e)
                 p = (row + px + i) * 4
                 for k in range(3):
-                    v = min(1.0, light[q + k] * s)
+                    v = light[q + k] * s / white
+                    total += 1
+                    if v > 1.0:
+                        v = 1.0
+                        clipped += 1
                     atlas[p + k] = int(255.0 * (v ** inv_gamma))
     vtf.write_png(path, ATLAS_W, height, bytes(atlas), opaque=True)
-    return place, ATLAS_W, height
+    # Reported because it is the one number that says whether a map's exposure is sane:
+    # a few per cent is light sources doing what light sources do, and a large fraction
+    # is a map whose midtones have been pushed off the top of the range.
+    return place, ATLAS_W, height, (100.0 * clipped / total if total else 0.0)
 
 
 # ----------------------------------------------------------------- meshing ----
@@ -290,7 +383,7 @@ def build_mesh(bsp, lm_place, lm_w, lm_h, textured, cos_limit, prototype):
     face happened to have, which is how surf_beginner2 came out 97% FLOOR.
 
     `textured` says which materials the pakfile actually carried. A material it did not
-    -- CS:S stock, which is most of what a surf map is built from -- gets the prototype
+    -- stock, which is most of what a surf map is built from -- gets the prototype
     set instead of the flat role colour it used to get, and needs a different UV to do
     it: the map's own UVs place a texture the way the mapper placed it, and a prototype
     grid has to be placed in the world instead, at one size everywhere. So the two UVs
@@ -354,26 +447,29 @@ def build_mesh(bsp, lm_place, lm_w, lm_h, textured, cos_limit, prototype):
 
         _, idx = groups[key]
         if f[6] >= 0:
-            tris = bsp.displacement_tris(f)
+            # Each point comes back as (displaced, flat). The flat one is only used for
+            # the lightmap coordinate -- see `displacement_tris` for why a displacement's
+            # lighting is parameterised over the quad rather than over the terrain.
+            tris = bsp.displacement_tris(f, with_base=True)
             # Displacements are terrain: average the normals over the grid so a
             # rock face is not a field of flat triangles. Brush faces below keep
             # their exact plane normal, because a surf ramp's edge IS sharp.
             acc = collections.defaultdict(lambda: [0.0, 0.0, 0.0])
             for t in tris:
-                u = [t[1][i] - t[0][i] for i in range(3)]
-                v = [t[2][i] - t[0][i] for i in range(3)]
+                u = [t[1][0][i] - t[0][0][i] for i in range(3)]
+                v = [t[2][0][i] - t[0][0][i] for i in range(3)]
                 nn = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
                       u[0] * v[1] - u[1] * v[0]]
-                for p in t:
+                for p, _flat in t:
                     k = (round(p[0], 2), round(p[1], 2), round(p[2], 2))
                     for i in range(3):
                         acc[k][i] += nn[i]
             for t in tris:
-                for p in t:
+                for p, flat in t:
                     k = (round(p[0], 2), round(p[1], 2), round(p[2], 2))
                     nn = acc[k]
                     ln = math.sqrt(sum(c * c for c in nn)) or 1.0
-                    idx.append(emit(key, p, [c / ln for c in nn], uv_of(p), uv2_of(p)))
+                    idx.append(emit(key, p, [c / ln for c in nn], uv_of(p), uv2_of(flat)))
         else:
             pts = bsp.face_points(f)
             if len(pts) < 3:
@@ -584,7 +680,7 @@ def zone_role(name):
     """(kind, stage number, track key) for a trigger's targetname, or None.
 
     [b]These maps label their own zones, and the importer used to throw the labels
-    away.[/b] The comment that stood here said a CS:S surf map has no convention for
+    away.[/b] The comment that stood here said a surf map of this genre has no convention for
     a start and a finish. That is true of surf_kitsune, which really does drive its
     stages with a filter chain -- and false of five of the eight maps beside it, which
     carry `zone_start`, `map_end_zone`, `startzone_s4` and `tm_bonus2_endzone` in
@@ -821,8 +917,86 @@ DESTINATION_LIFT = 24.0
 
 
 def floor_of(box):
-    """The middle of a box's floor. Where a `!s3` puts a player."""
+    """The middle of a box's floor. Where a `!s3` puts a player.
+
+    [b]A trigger's floor is not the map's floor, and this is where a player is left
+    standing inside one.[/b] `box[0][2]` is the bottom of the VOLUME, and a mapper sinks
+    a trigger into the ground on purpose so nobody can walk under its lower edge — so on
+    every map whose start zone has no `info_player_*` inside it, the spawn came out
+    somewhere below the surface. Measured afterwards with `tools/spawn_check.gd`:
+    surf_aquaflow's main spawn was **64 units** inside solid, against a 72-unit player.
+
+    The box is still the right answer for WHERE; [method lift_out_of_solid] is what makes
+    it an answer for HOW HIGH, and it has the brush data to know.
+    """
     return [(box[0][0] + box[1][0]) * 0.5, (box[0][1] + box[1][1]) * 0.5, box[0][2]]
+
+
+def point_in_brush(bsp, index, point, epsilon=0.1):
+    """Is a point inside one brush? True when it is behind every one of its sides.
+
+    A Source brush is the intersection of its half-spaces, so this is the definition
+    rather than an approximation of it.
+    """
+    first, count, _ = bsp.brushes[index]
+    for side in bsp.brushsides[first:first + count]:
+        pl = bsp.planes[side[0]]
+        if pl[0] * point[0] + pl[1] * point[1] + pl[2] * point[2] - pl[3] > epsilon:
+            return False
+    return True
+
+
+def lift_out_of_solid(bsp, point, height=72.0, limit=256.0):
+    """Raise a spawn point until a player standing on it is not inside a brush.
+
+    Source is Z-up here -- this runs before the axis swap -- so "up" is +Z.
+
+    [b]Checked at the FEET and at the head, because a spawn can be wrong either way.[/b]
+    A point on a trigger's floor is usually a few units into the ground; a point under a
+    low ceiling is clear at the feet and not at the head, and a player spawned there is
+    stuck just as thoroughly.
+
+    Gives up at [param limit] and returns the point unchanged rather than teleporting
+    somebody an arbitrary distance: a spawn that is a quarter of the map deep in solid is
+    a map this importer has read wrongly somewhere else, and moving it would hide that.
+
+    [b]IT CANNOT SEE DISPLACEMENTS, AND THAT IS THE CASE IT WAS WRITTEN FOR.[/b] Brushes
+    are half-spaces and a point test against them is exact; a displacement is terrain,
+    welded triangles with no inside, and there is no cheap containment test for one here.
+    `surf_aquaflow`'s main spawn — the one that prompted this, 64 units under the surface
+    against a 72-unit player — is buried in the reef, which is displacement, so this
+    function looks at it and correctly reports it clear. It fixes a spawn inside a BRUSH
+    and nothing else, and `tools/spawn_check.gd` still finds 36 bad points across five
+    maps after it runs.
+    
+    The answer is almost certainly not here: the game has a physics world and one shape
+    query per spawn at map load would settle brushes and terrain alike, in the one place
+    that knows about both. Left in because a brush-buried spawn is still a real case and
+    the next person needs to know which half is covered.
+    """
+    solid = [i for i in range(len(bsp.brushes))
+             if bsp.brushes[i][2] & MASK_PLAYERSOLID]
+
+    def blocked(at):
+        for probe in (at, [at[0], at[1], at[2] + height * 0.5],
+                      [at[0], at[1], at[2] + height - 1.0]):
+            for i in solid:
+                if point_in_brush(bsp, i, probe):
+                    return True
+        return False
+
+    if not blocked(point):
+        return point
+
+    step = 4.0
+    raised = 0.0
+    while raised < limit:
+        raised += step
+        lifted = [point[0], point[1], point[2] + raised]
+        if not blocked(lifted):
+            return lifted
+        step *= 1.5
+    return point
 
 
 def resolve_box(z, spec):
@@ -968,7 +1142,7 @@ def implied_zones(z):
                   comment="the start line is stage 1")
 
 
-def spawn_zones(z, spawns, doc):
+def spawn_zones(z, spawns, doc, bsp=None):
     """One SPAWN per track: where `spawn_for(track)` puts a player.
 
     The main track's is NOT simply the biggest cluster of `info_player_*`. On a map
@@ -998,6 +1172,16 @@ def spawn_zones(z, spawns, doc):
             best = pick_spawn(spawns)
             at, yaw = best["origin_src"], best["yaw_src"]
         if at is not None:
+            # [b]Every route to `at` above can land inside a brush, and only one of them
+            # is obviously wrong.[/b] `floor_of` takes a trigger's own underside, which
+            # is below the ground by design; a `destination` is wherever the mapper put
+            # an entity, which on a teleport aimed at a doorway can be in the door frame;
+            # and an `info_player_*` origin is at the feet, so a map that moved its floor
+            # after placing one leaves it buried. Checked here rather than per-route,
+            # because the failure is the same and a player stuck in a wall does not care
+            # which of the three put them there.
+            if bsp is not None:
+                at = lift_out_of_solid(bsp, at)
             z.add("SPAWN", track, destination=at, yaw=yaw,
                   comment="the spawn for %s" % z.track_names.get(str(track), "track %d" % track))
 
@@ -1084,7 +1268,7 @@ def classify_zones(bsp, min_thickness=MIN_ZONE_THICKNESS, doc=None):
         doorway_teleports(z, doc["doorways"])
     implied_zones(z)
     stage_destinations(z)
-    spawn_zones(z, spawns, doc)
+    spawn_zones(z, spawns, doc, bsp)
     dropped = drop_unrunnable_tracks(z)
 
     push, other = [], []
@@ -1141,7 +1325,7 @@ def emit_zones(z):
 def pick_spawn(spawns):
     """The spawn a map should start you at.
 
-    A CS:S map has up to 144 of them in two team blocks. The lowest-numbered
+    One of these maps has up to 144 of them in two team blocks. The lowest-numbered
     is arbitrary; the CENTRE of the biggest cluster is where the mapper put the start
     pad, and taking the mean over all of them is wrong the moment a map spawns two
     teams at opposite ends.
@@ -1159,6 +1343,104 @@ def pick_spawn(spawns):
 
 
 # ------------------------------------------------------------------- driver ---
+def _numbers(value, count):
+    """The first [param count] numbers out of a Source key like `"235 222 177 600"`."""
+    parts = str(value).replace(",", " ").split()
+    out = []
+    for token in parts[:count]:
+        try:
+            out.append(float(token))
+        except ValueError:
+            return None
+    return out if len(out) == count else None
+
+
+def lighting_of(bsp):
+    """The lighting the map already describes, as a document a renderer can read.
+
+    [b]Every one of these maps says how it is lit and nothing has ever read it.[/b] The
+    geometry, the zones, the spawns and the baked lightmap all come out of the .bsp, and
+    then the sun angle, the sun colour, the ambient colour, the fog and the sky name --
+    which the mapper set deliberately and which vrad and the engine both used -- were
+    left in the entity lump. So an imported map is drawn under a hardcoded sun at
+    (-55, -35) with a flat blue-grey background, on every map, whatever the map says.
+    `Surf_Mesa` wants a sun at -28 degrees in warm 235/222/177 with fog from 5000 units;
+    `surf_beginner2` wants one straight overhead in 255/211/168. They looked like two
+    different games and they were lit like one.
+
+    Everything here is optional: a map with no `light_environment` returns a document
+    with no sun in it, and the consumer keeps its own default. That is the same contract
+    as every other block in this manifest -- absent means "nothing said", never zero.
+
+    Source's `_light` is four numbers, RGB plus a brightness that is NOT a multiplier on
+    a 0-255 colour but the intensity vrad compiled with; it is carried through as it
+    stands rather than folded in, because what a renderer should do with 600 is a
+    renderer's decision and folding it here would throw the colour away.
+    """
+    out = {}
+
+    env = next((e for e in bsp.entities if e.get("classname") == "light_environment"), None)
+    if env is not None:
+        sun = {}
+        angles = _numbers(env.get("angles", ""), 3)
+        # `pitch` overrides the pitch in `angles` when both are present, which is a
+        # Source quirk rather than a choice: the entity has a separate pitch key because
+        # angles[0] is clamped in Hammer's UI and mappers need the range.
+        pitch = _numbers(env.get("pitch", ""), 1)
+        if angles:
+            sun["yaw_src"] = angles[1]
+            sun["pitch_src"] = pitch[0] if pitch else angles[0]
+        elif pitch:
+            sun["pitch_src"] = pitch[0]
+        light = _numbers(env.get("_light", ""), 4)
+        if light:
+            sun["colour"] = [c / 255.0 for c in light[:3]]
+            sun["brightness"] = light[3]
+        ambient = _numbers(env.get("_ambient", ""), 4)
+        if ambient:
+            sun["ambient_colour"] = [c / 255.0 for c in ambient[:3]]
+            sun["ambient_brightness"] = ambient[3]
+        spread = _numbers(env.get("SunSpreadAngle", ""), 1)
+        if spread:
+            sun["spread_degrees"] = spread[0]
+        if sun:
+            out["sun"] = sun
+
+    fog_ent = next((e for e in bsp.entities
+                    if e.get("classname") == "env_fog_controller"), None)
+    if fog_ent is not None:
+        fog = {}
+        for key, name in (("fogstart", "start"), ("fogend", "end"),
+                          ("fogmaxdensity", "max_density")):
+            value = _numbers(fog_ent.get(key, ""), 1)
+            if value:
+                fog[name] = value[0]
+        colour = _numbers(fog_ent.get("fogcolor", ""), 3)
+        if colour:
+            fog["colour"] = [c / 255.0 for c in colour]
+        # `fogenable` absent means off in Source, so absence is a real answer here and
+        # not a missing one.
+        fog["enabled"] = str(fog_ent.get("fogenable", "0")).strip() in ("1", "true")
+        if len(fog) > 1:
+            out["fog"] = fog
+
+    world = next((e for e in bsp.entities if e.get("classname") == "worldspawn"), None)
+    if world is not None and world.get("skyname"):
+        out["sky_name"] = str(world["skyname"])
+
+    # The count only, not the lights. A point light in Source is an input to vrad and
+    # its output is already in the lightmap this importer bakes down -- placing 148 real
+    # lights would light the map twice. It is carried because "this map has 148 lights
+    # in it and none of them are dynamic" is worth being able to say out loud, and
+    # because a renderer that ever wants glow around them needs to know they exist.
+    out["baked_light_count"] = sum(
+        1 for e in bsp.entities
+        if e.get("classname") in ("light", "light_spot")
+    )
+
+    return out
+
+
 def load_overrides(path, map_id):
     """What a person worked out about a map, from `maps/zones/<id>.json`.
 
@@ -1213,7 +1495,7 @@ def main(argv=None):
     faces = [f for f in bsp.model_faces(0) if not (bsp.face_material(f)[1] & SKIP_MASK)]
 
     lm_path = os.path.join(d, map_id + "_lightmap.png")
-    place, lm_w, lm_h = build_lightmap(bsp, faces, lm_path)
+    place, lm_w, lm_h, lm_clipped = build_lightmap(bsp, faces, lm_path)
 
     # The textures are decoded BEFORE the mesh, because which of them the pakfile
     # actually carried is what decides whether a surface gets the map's own UVs or a
@@ -1257,6 +1539,7 @@ def main(argv=None):
         "tier": int(doc.get("tier", a.tier)),
         "bounds": {"min": list(to_godot(lo)), "max": list(to_godot(hi))},
         "lightmap": {"file": os.path.basename(lm_path), "width": lm_w, "height": lm_h},
+        "lighting": lighting_of(bsp),
         "surfaces": surfaces,
         "collision": collision,
         "units_per_square": UNITS_PER_SQUARE,
@@ -1301,7 +1584,8 @@ def main(argv=None):
         print("  %d brush entities left non-solid: %s"
               % (sum(skipped_entities.values()),
                  ", ".join("%s x%d" % kv for kv in skipped_entities.most_common(6))))
-    print("  lightmap %dx%d, %d lit faces" % (lm_w, lm_h, len(place)))
+    print("  lightmap %dx%d, %d lit faces, %.1f%% of luxels clipped to white"
+          % (lm_w, lm_h, len(place), lm_clipped))
     inflated = sum(1 for v in respawn if v.get("inflated"))
     print("  %d spawns, %d respawn volumes (%d thickened to %g units), %d push, %d other"
           % (len(spawns), len(respawn), inflated, a.min_zone_thickness, len(push), len(other)))

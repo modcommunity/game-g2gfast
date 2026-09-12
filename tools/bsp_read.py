@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read a Source VBSP (v19/v20) far enough to get geometry and zones out of it.
 
-Point it at a Counter-Strike: Source surf or bhop map and it writes an .obj of the
+Point it at a surf or bhop map in the genre's usual format and it writes an .obj of the
 world geometry and a .json of the entities that become timer zones and spawns.
 
     tools/bsp_read.py ../inspirations/g2gfast/surf_kitsune.bsp out/
@@ -292,13 +292,27 @@ class Bsp:
         return list(dict.fromkeys(pts))
 
     # -- displacements ---------------------------------------------------
-    def displacement_tris(self, f):
+    def displacement_tris(self, f, with_base=False):
         """A displacement's subdivided surface.
 
         The face is the flat quad the mapper drew; the real surface is a
         (2^power + 1) square grid of offsets from it. Ignoring these and drawing
         the quad is the obvious shortcut and it deletes every piece of terrain in
         the map -- 1434 of them in Surf_Mesa, including ramps players ride.
+
+        [b]`with_base` returns each point as `(displaced, flat)`, and the flat one is
+        not a curiosity -- it is where a displacement's LIGHTING lives.[/b] A
+        displacement's lightmap is parameterised over the quad the mapper drew, not
+        over the surface that came out: the luxel extents in the face say so, being
+        12x12 or 7x12 on this map's terrain where the grid is always 9x9. So the
+        lightmap coordinate has to be projected from the flat point. Projecting the
+        displaced one instead sends it off the end of the face's luxel range -- by as
+        much as the terrain bulges, which on a cliff is hundreds of units -- where the
+        clamp that keeps it inside the atlas parks whole hillsides on a single edge
+        luxel. That is not subtle and it is not a seam: two thirds of this map's
+        triangles are displacements, and they rendered as smooth bright gradients with
+        no shadow in them at all, which read as "the lighting is flat" rather than as
+        "the lighting is being sampled in the wrong place".
         """
         o = f[6] * 176
         start = struct.unpack_from("<3f", self.dispinfo, o)
@@ -320,7 +334,8 @@ class Bsp:
                 s = col / (size - 1)
                 base = [lft[a] + (rgt[a] - lft[a]) * s for a in range(3)]
                 dv = self.dispverts[vstart + row * size + col]
-                grid.append(tuple(base[a] + dv[a] * dv[3] for a in range(3)))
+                point = tuple(base[a] + dv[a] * dv[3] for a in range(3))
+                grid.append((point, tuple(base)) if with_base else point)
         tris = []
         for row in range(size - 1):
             for col in range(size - 1):
@@ -445,7 +460,7 @@ def write_obj(bsp, out_path):
     return len(verts), sum(len(v) for v in groups.values()), sorted(groups)
 
 
-# Entities worth carrying across. Everything else in a CS:S map is round logic,
+# Entities worth carrying across. Everything else in one of these maps is round logic,
 # weapons and decoration this game has no use for.
 WANTED = {
     "info_player_terrorist", "info_player_counterterrorist", "info_player_start",

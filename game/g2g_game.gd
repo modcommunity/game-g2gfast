@@ -236,7 +236,7 @@ func set_tick_rate(rate: int) -> bool:
 func _build_styles() -> void:
 	for style in DotFpsStyle.defaults():
 		# Prespeed limits are in genre units here, like everything a style says to
-		# an operator. 290 u/s is the number every CS:S timer ships.
+		# an operator. 290 u/s is the number every timer in this genre ships.
 		style.prespeed_limit = 290.0
 
 		# [b]The SERVER decides auto-hop, not the style.[/b] The shipped styles force
@@ -540,6 +540,11 @@ func add_player(
 	player.tick_rate = tick_rate
 	player.samples_input = local
 	player.has_camera = local
+
+	# The layout's player mask rather than the magic 1. With placed blocks on the prop
+	# layer, a mask of 1 is a player who walks through every one of them.
+	if player_stack != null:
+		player.collision_mask = player_stack.player_collision_mask()
 	player.base_tunables = tunables
 	add_child(player)
 
@@ -647,6 +652,25 @@ func spawn_player(id: StringName) -> void:
 
 	var track := player.timer.track if player.timer != null else DotTimerTrack.MAIN
 	var map := current_map_node()
+
+	# [b]The director chooses among the map's own starts; the map is the fallback.[/b]
+	# `G2GPlayerStack.refresh_spawns` copies every track's start into it, so this is not
+	# a second set of spawns — it is the per-site cooldown, the occupancy check and, with
+	# `sv_deathmatch` on, the protection window that is granted inside `choose` and
+	# nowhere else. Without this call the director was fed every start on every map and
+	# asked nothing for the life of the server.
+	if player_stack != null:
+		var chosen := player_stack.choose_start(id, track)
+
+		if chosen.ok:
+			var choice := chosen.value as DotSpawnChoice
+			# Degrees out, for the same reason radians went in: `DotFpsState.yaw` is in
+			# degrees and `DotFpsController` converts at exactly this boundary too.
+			player.teleport(
+				choice.transform.origin,
+				rad_to_deg(choice.transform.basis.get_euler().y)
+			)
+			return
 
 	if map != null:
 		player.teleport(map.spawn_for(track), map.spawn_yaw_for(track))

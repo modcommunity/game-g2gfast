@@ -170,7 +170,12 @@ func _construct() -> void:
 
 	var solids := _build_collision(mi, blob)
 
-	G2GGeometry.sun(self)
+	# [b]The map's own lighting, not this game's.[/b] `G2GGeometry.sun` puts one
+	# hardcoded sun at (-55, -35) over a flat blue-grey background, which is right for the
+	# hand-built maps it was written for and wrong for every imported one — each of those
+	# carries its own sun angle, sun colour, ambient colour, fog range and sky name, and
+	# not one of them had ever been read. See [G2GLighting].
+	G2GLighting.apply(self, manifest.get("lighting", {}))
 	print("[bsp] %s: %d surfaces, %d verts, %d materials, %d collision shapes" % [
 		manifest.get("id", "?"), mesh.get_surface_count(),
 		mesh.surface_get_array_len(0) if mesh.get_surface_count() > 0 else 0,
@@ -296,7 +301,14 @@ func _surface_arrays(blob: PackedByteArray, s: Dictionary) -> Array:
 
 func _material_for(s: Dictionary, dir: String, lightmap: Texture2D) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
-	mat.shader = load("res://game/g2g_bsp_lightmapped.gdshader")
+	# [b]The manifest has carried `translucent` since the importer learned to read a
+	# VMT, and nothing had ever read it.[/b] Every surface got the one shader, and that
+	# shader wrote ALPHA, so every surface in every imported map was drawn in the
+	# transparent pass -- see the comment at the top of it. Opaque is the default and
+	# the twenty surfaces the maps actually declare translucent are the exception, which
+	# is the way round the .bsp itself says.
+	mat.shader = load("res://game/g2g_bsp_translucent.gdshader" if bool(s.get("translucent", false))
+		else "res://game/g2g_bsp_lightmapped.gdshader")
 	mat.set_shader_parameter("lightmap_tex", lightmap)
 	mat.set_shader_parameter("light_boost", light_boost)
 	mat.set_shader_parameter("ambient", ambient)

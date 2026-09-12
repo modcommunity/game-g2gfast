@@ -98,15 +98,18 @@ func _module_load() -> DotResult:
 	add_command("g2g_style", _cmd_style, "List styles, or switch", "").with_chat()
 	add_command("g2g_track", _cmd_track, "main, or bonus <n>", "").with_chat()
 	add_command("g2g_top", _cmd_top, "Fastest times here", "").with_chat()
-	# **Console-only, deliberately, and `examples/dedicated.gd` asserts it.**
-	# Every other command in this block is `.with_chat()`; this one is not, and the
-	# difference is the genre. A map change destroys every run in progress, so on a
-	# records server it is not something a player with the flag should be able to do
-	# by typing mid-run — it goes through the console, RCON, or the vote.
+	# **Not `.with_chat()`, and reachable from chat anyway.** Every other command in this
+	# block marks itself; this one carries CHANGEMAP instead and lets the flag answer, which
+	# is what `sv_chat_commands` made the default.
 	#
-	# A command relayed from the website arrives as `Source.CHAT` by default and is
-	# therefore refused here too. `DotChatRelayConfig.command_source` is the switch for
-	# an operator who wants their site admins to reach it.
+	# It used to be console-only and `examples/dedicated.gd` asserted it, on the reasoning
+	# that a map change destroys every run in progress. What that actually produced was an
+	# operator holding CHANGEMAP typing `/map surf_beginner` into the chat box in front of
+	# them and being told the command cannot be run from chat — a refusal aimed at the one
+	# person entitled to run it. A player without the flag is still refused, on the same
+	# line, by the check that was always doing the work. An operator who wants the old
+	# behaviour back sets `sv_chat_commands 0`, or `allow_chat_change = false` on the
+	# dot-map block below for the map change alone.
 	add_command(
 		"g2g_map", _cmd_map, "Change map, or list them", DotAdminFlags.CHANGEMAP
 	)
@@ -116,9 +119,9 @@ func _module_load() -> DotResult:
 	# one game and every surf map in circulation, the plain name meant the wrong operation
 	# every time it was typed.
 	#
-	# `allow_chat_change` stays OFF, which is the default and is the same policy the
-	# paragraph above puts on `g2g_map`: a map change destroys every run in progress, and a
-	# records server does not let a player do that by typing.
+	# `allow_chat_change` is left at its default, which is ON, matching `g2g_map` above:
+	# CHANGEMAP is what decides who may change the map, and it decides it the same way
+	# wherever the line was typed.
 	#
 	# `change_fn` rather than the session, because `G2GGame.change_map` is what resets the
 	# timer, the zones and the styles -- handing the session straight to the command would

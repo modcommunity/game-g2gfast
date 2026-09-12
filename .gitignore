@@ -31,6 +31,7 @@
 /addons/dot_user
 /addons/dot_user_avatar
 /addons/dot_voice
+/addons/dot_weapon
 
 # Exports
 build/
@@ -71,3 +72,4 @@ screenshots/
 /addons/dot_player_char
 /addons/dot_player_class
 /addons/dot_team
+/addons/dot_lighting

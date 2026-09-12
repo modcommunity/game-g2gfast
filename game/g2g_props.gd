@@ -339,6 +339,15 @@ func _carry(delta: float) -> void:
 
 
 func _on_spawned(prop: DotPropInstance) -> void:
+	# [b]On the prop layer, which is what makes blocks touch each other.[/b] A spawned
+	# block is a `RigidBody3D` on Godot's default layer 1 masking layer 1, so two placed
+	# in the same spot passed through one another — a practice line whose blocks were
+	# solid against the map and transparent to their own kind. `prop`'s row in the
+	# layout is [world, player, npc, prop, projectile, vehicle], which is the whole of
+	# what a stacked practice block needs.
+	if game != null and game.player_stack != null and prop.node != null:
+		var _put := game.player_stack.classify(prop.node, &"prop")
+
 	prop_placed.emit(prop.owner_id, prop)
 
 	if game != null and game.progress != null and prop.owner_id != &"":

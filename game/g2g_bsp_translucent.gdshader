@@ -7,6 +7,18 @@ shader_type spatial;
 // colour out. A dynamic light in a surf map has nothing to light: the world is
 // static and the only mover is the player.
 //
+// [b]The translucent twin of `g2g_bsp_lightmapped.gdshader`.[/b] Identical but for
+// the ALPHA write at the end, which is the whole difference: writing ALPHA is what
+// puts a Godot spatial shader in the transparent pass. A material gets this one only
+// when the map's own VMT said `$translucent` or `$alphatest` -- glass, a credits
+// panel, an alpha-masked grid -- which is 20 surfaces out of 420 across the eight
+// maps. Everything else is opaque and stays that way, for the reason written in the
+// other file.
+//
+// Kept as a copy rather than as an `#include` of a shared body: Godot's `#include`
+// cannot be conditional, so the two would still be two files, and a pair that has to
+// stay in step is easier to keep in step when both are readable end to end.
+//
 // [b]Opaque, and the ALPHA write that used to be at the bottom of `fragment()` is
 // why.[/b] Godot decides a spatial shader is TRANSPARENT by looking at whether it
 // writes ALPHA -- not at what it writes -- so one unconditional `ALPHA = base.a;`
@@ -44,4 +56,5 @@ void fragment() {
 	vec4 base = has_albedo ? texture(albedo_tex, UV * uv_scale) * tint : tint;
 	vec3 lm = texture(lightmap_tex, UV2).rgb;
 	ALBEDO = base.rgb * (lm * light_boost + ambient);
+	ALPHA = base.a;
 }

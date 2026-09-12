@@ -192,3 +192,32 @@ def write_png(path, w, h, rgba, opaque=False):
 
 def is_opaque(rgba):
     return all(rgba[i] == 255 for i in range(3, len(rgba), 4))
+
+
+def is_blank(rgba, stride=37):
+    """A flat dark image: a texture with nothing in it.
+
+    [b]`tools/toolsblack` decodes perfectly and is 1024x1024 pixels of zero.[/b] So do
+    `cs_italy/black` and the handful like it, and between them they are 5.9 billion
+    square units across the eight maps -- drawn, correctly, as absolutely nothing,
+    which to a player is indistinguishable from a texture that failed to load. The
+    caller routes these to the prototype set instead, the same way it routes a texture
+    that was never in the file, because "no texture" is what both of them are.
+
+    Flat AND dark, not either: a flat white panel is a light and reads as one, and a
+    dark texture with something in it is a dark texture. `grids/grid_white` is exactly
+    that second case -- a black panel with one bright line, mean 12 and deviation 30 --
+    and it is most of what surf_kitsune is made of, so a rule that caught it would
+    repaint that whole map over a property it has on purpose.
+    """
+    lo, hi, total, n = 255, 0, 0, 0
+    for i in range(0, len(rgba) - 3, 4 * stride):
+        for k in range(3):
+            v = rgba[i + k]
+            lo = min(lo, v)
+            hi = max(hi, v)
+            total += v
+            n += 1
+    if n == 0:
+        return False
+    return hi - lo <= 4 and total / n <= 16.0

@@ -56,6 +56,15 @@ var _replay_moving: bool = false
 ## The tunables this player was built with, before any style. See [method set_movement].
 var base_tunables: DotFpsTunables = null
 
+## The collision layers this player's movement sweeps against.
+##
+## [b]Not `DotFpsTunables`' default of 1, and it has to be re-applied.[/b] One means
+## bit 0, which is right only while every body in the game is on bit 0 — the state a
+## layout exists to end. `set_movement` replaces the whole tunables object on every
+## `sv_airaccelerate`, so a mask written once at build time is a mask the first cvar
+## change silently throws away and a player who walks through every placed block.
+var collision_mask: int = 1
+
 var tick_rate: int = 128
 
 
@@ -70,6 +79,7 @@ func _ready() -> void:
 	# just produced. See game-playground's CLAUDE.md for the ordering argument.
 	controller.drive = DotFpsController.Drive.EXTERNAL
 	controller.tunables = base_tunables
+	base_tunables.collision_mask = collision_mask
 	# body_ref left unset so it resolves to this node. `of_self()` would resolve to
 	# the CONTROLLER, a plain Node, and setup() would refuse — the player would then
 	# simply never move, with nine failures pointing anywhere but here.
@@ -101,6 +111,9 @@ func _ready() -> void:
 func set_movement(tunables: DotFpsTunables) -> DotResult:
 	base_tunables = tunables
 	controller.tunables = tunables
+	# Re-applied, because this is a NEW tunables object: `G2GMovement.tunables_for`
+	# builds one from the config and the config has no idea what a collision layer is.
+	tunables.collision_mask = collision_mask
 
 	# `set_style` derives from the controller's stored base, which was the OLD
 	# tunables. Clearing that lets setup() adopt the new base, and re-applying the
@@ -113,6 +126,20 @@ func set_movement(tunables: DotFpsTunables) -> DotResult:
 		sampler.tunables = controller.tunables
 
 	return result
+
+
+## Sets which collision layers this player's movement sweeps against.
+##
+## Called by `G2GGame` once the stack is up, because the layout is the stack's. Applied to
+## whatever tunables are current and remembered for the ones `set_movement` builds next.
+func use_collision_mask(mask: int) -> void:
+	collision_mask = mask
+
+	if controller != null and controller.tunables != null:
+		controller.tunables.collision_mask = mask
+
+	if base_tunables != null:
+		base_tunables.collision_mask = mask
 
 
 ## Both halves of a style, together.
