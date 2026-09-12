@@ -10,7 +10,14 @@ extends Node
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
+## The app's URL segment on the website, which is this game's code name.
+##
+## Unique and lowercase because the site already made it so. Display only — a
+## listing prints it to say which game this is, and nothing treats it as proof.
+const APP_URL := "g2gfast"
+
 var server: DotServer = null
+var query_host: DotQueryHost = null
 var game: G2GGame = null
 
 
@@ -92,11 +99,28 @@ func _boot() -> void:
 	server.config = config
 	add_child(server)
 
+	# Queries come from their own addon now. This one is left on the registry
+	# default deliberately — the server here boots itself, so the host is ready
+	# before the server has registered and has to wait for it, which is the path
+	# a real deployment takes and the one worth exercising.
+	query_host = DotQueryHost.new()
+	query_host.name = "QueryHost"
+	query_host.app_url = APP_URL
+	add_child(query_host)
+
 	for _i in range(60):
 		await get_tree().process_frame
 		if server.state == DotServer.State.RUNNING:
 			break
 	_check(server.state == DotServer.State.RUNNING, "the server boots")
+
+	# The host attaches through the registry, which cannot happen before the
+	# server has registered itself, so it lands a frame or two after boot.
+	for _i in range(60):
+		if query_host.is_open():
+			break
+		await get_tree().process_frame
+	_check(query_host.is_open(), "the query host attached and opened")
 
 	var g2g_config := G2GConfig.new()
 	g2g_config.records_directory = ""
@@ -265,7 +289,10 @@ func _test_replay_bot_cvar() -> void:
 
 func _test_query_and_chat() -> void:
 	print("what a server browser and a chat see")
-	var source := server.query_source
+	# The host's own reference, not server.query_source: dot-server holds that one
+	# as a plain Object because it must not name this addon, so nothing typed can
+	# be inferred from it. This project links dot-server-query, so it can.
+	var source := query_host.source
 	_check(source != null and source.provider_names().has("g2gfast"), "the module contributes to queries",
 		str(source.provider_names()) if source else "no query source")
 	if source != null:
