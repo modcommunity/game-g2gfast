@@ -55,6 +55,23 @@ signal player_removed(player_id: StringName)
 ## shape every headless netcode test in this family takes.
 @export var service_scope: StringName = &""
 
+## The dot-cloud client to fetch a missing map through, by registry name.
+##
+## [b]Looked up rather than exported as a node, and optional.[/b] A map is content and
+## the browser build no longer carries any: `maps/imported/` is excluded from the web
+## export, because shipping sixty-six megabytes of maps to every player so that most of
+## them can play one is the opposite of a delivery network. A build that DOES carry its
+## maps -- a dedicated server run from source, every headless suite -- finds them in
+## [constant G2GMapCatalogue.IMPORTED_ROOTS] and never reaches this.
+##
+## Empty, or a registry with nothing under it, is not an error. It means this build can
+## only play maps it already has, which is exactly what a server run from source is.
+@export var map_content_service: StringName = &"dot_cloud_client"
+
+## Content ids already fetched and registered, so a rotation that comes back round does
+## not ask dot-cloud again. dot-cloud is itself idempotent; this saves the await.
+var _map_content_seen: Dictionary = {}
+
 var authoritative: bool = true
 
 var maps: DotMapSession = null
@@ -797,7 +814,84 @@ func _feed_timers() -> void:
 # --- Maps ------------------------------------------------------------------
 
 func change_map(id: StringName) -> DotResult:
+	# [b]Before the change, not after it.[/b] `DotMapSession.change_to` refuses an id the
+	# catalogue does not hold, and on a browser client the catalogue holds nothing until
+	# the pack is mounted -- so without this line a client joining a server whose map it
+	# has never seen is told "no such map" about a map that is sitting on the CDN.
+	var content := await ensure_map_content(id)
+
+	if not content.ok:
+		return content
+
 	return await maps.change_to(id)
+
+
+## Make sure the map [param id] is something the catalogue can load, fetching it if not.
+##
+## [b]The map id IS the content id.[/b] That is a convention rather than a mechanism, and
+## it is the one the publisher already follows: `dist/surf_mesa/` holds `surf_mesa.json`
+## and `surf_mesa.bin`, and the manifest names `surf_mesa` as its content id. Anything
+## else would need a second registry mapping one to the other, maintained in a third
+## place, to express a relationship that is already true.
+##
+## Succeeds and does nothing in three cases that are all normal: the catalogue already
+## has the map (a build that ships it, or a pack fetched earlier), there is no dot-cloud
+## client (a server run from source), or the map is one of the built-in scenes.
+func ensure_map_content(id: StringName) -> DotResult:
+	if id == &"":
+		return DotResult.fail(DotError.CODE_INVALID, "No map id.")
+
+	if maps != null and maps.catalogue != null and maps.catalogue.has(id):
+		return DotResult.success(null)
+
+	if _map_content_seen.has(id):
+		return DotResult.success(null)
+
+	var cloud: Object = DotRegistry.get_service(map_content_service)
+
+	if cloud == null or not cloud.has_method("ensure"):
+		# Not an error, and deliberately not a warning either. `change_to` is about to
+		# refuse the id with a message naming the map, which is the better one to read.
+		return DotResult.success(null)
+
+	DotLog.info(CHANNEL, "fetching a map this build does not have", {"map": String(id)})
+
+	var got: Variant = await cloud.call("ensure", id)
+
+	if not (got is DotResult):
+		return DotResult.fail(
+			DotError.CODE_INTERNAL,
+			"The content client answered with something else."
+		)
+
+	var res: DotResult = got
+
+	if not res.ok:
+		return res.wrap("could not fetch the map %s" % id)
+
+	# `ensure` returns the entry scene path when the manifest names one and the mount
+	# prefix when it does not. A map pack names `<id>.json`, so this is normally the
+	# first -- and the directory is what the catalogue wants either way.
+	var where := str(res.value)
+	var dir := where.get_base_dir() if where.ends_with(".json") else where
+	var map := G2GMapCatalogue.at_directory(id, dir)
+
+	if map == null:
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"%s was fetched but does not look like a map." % id
+		)
+
+	var added := maps.catalogue.add(map)
+
+	if not added.ok:
+		return added
+
+	_map_content_seen[id] = true
+	DotLog.info(CHANNEL, "a map was added from delivered content", {
+		"map": String(id), "dir": dir
+	})
+	return DotResult.success(null)
 
 
 func _on_map_changing(_from: DotMapDef, _to: DotMapDef) -> void:

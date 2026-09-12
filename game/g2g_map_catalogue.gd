@@ -179,6 +179,41 @@ static func _scene_ids(root: String) -> Array[StringName]:
 	return out
 
 
+## One map whose directory IS the map, rather than a root holding several.
+##
+## [b]A dot-cloud mount is not shaped like a maps root and a scan pointed at one finds
+## nothing while reporting no error.[/b] [method _imported] walks `<root>/<id>/<id>.json`
+## -- a directory per map, named for the map. dot-cloud mounts a pack at
+## `<mount>/<content_id>/<version>/`, so the directory is named for the VERSION while the
+## files inside are named for the content id, and every level of that is off by one from
+## what the scan expects. Pointing [member IMPORTED_ROOTS] at a mount was the obvious
+## thing to try and it silently offers no maps.
+##
+## So a mounted pack is registered directly: the caller already knows the id, because it
+## is the content id it asked dot-cloud for.
+##
+## Returns null when the directory does not hold the two files a map is made of, which is
+## the same judgement [method _imported] makes and for the same reason -- a map with no
+## mesh loads to an empty world and nothing says why.
+static func at_directory(id: StringName, dir: String) -> DotMapDef:
+	var base := dir.rstrip("/")
+	var manifest := "%s/%s.json" % [base, id]
+
+	if not FileAccess.file_exists(manifest):
+		DotLog.warn(CHANNEL, "a mounted map has no manifest", {
+			"id": String(id), "looked_for": manifest
+		})
+		return null
+
+	if not FileAccess.file_exists("%s/%s.bin" % [base, id]):
+		DotLog.warn(CHANNEL, "a mounted map has no mesh and was skipped", {
+			"id": String(id), "dir": base
+		})
+		return null
+
+	return _define(id, IMPORTED_SCENE, manifest, "imported")
+
+
 static func _define(
 	id: StringName, scene: String, sidecar: String, default_author: String
 ) -> DotMapDef:
