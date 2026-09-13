@@ -1,5 +1,7 @@
 extends DotModule
 
+const G2GPaths := preload("g2g_paths.gd")
+
 const G2GCamera := preload("g2g_camera.gd")
 const G2GCombat := preload("g2g_combat.gd")
 const G2GConfig := preload("g2g_config.gd")
@@ -684,7 +686,7 @@ func _register_games() -> void:
 	var descriptor := DotGameDescriptor.new()
 	descriptor.game_id = "g2gfast"
 	descriptor.display_name = "g2gfast"
-	descriptor.scene = "res://game/g2g.tscn"
+	descriptor.scene = G2GPaths.rebase("res://game/g2g.tscn")
 	descriptor.client_scene = ""
 	server.games.add_game(descriptor)
 

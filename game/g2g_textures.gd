@@ -1,5 +1,7 @@
 extends RefCounted
 
+const G2GPaths := preload("g2g_paths.gd")
+
 const G2GUnits := preload("g2g_units.gd")
 
 ## Prototype ("dev") textures for the maps, and where a real texture set is dropped in.
@@ -49,7 +51,7 @@ const G2GUnits := preload("g2g_units.gd")
 ## [G2GBspMap] calls, prefers what is in here. A missing directory is not an error state
 ## — everything falls back to the grid. `dot-server-deploy/setup.sh` copies `textures/`
 ## into its own build, so what is here ships in the browser export as well.
-const TEXTURE_DIR := "res://textures/prototype"
+static var TEXTURE_DIR := G2GPaths.rebase("res://textures/prototype")
 
 ## What each surface in a map is FOR, which is what decides how it is textured.
 ##

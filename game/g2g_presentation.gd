@@ -1,5 +1,7 @@
 extends Node
 
+const G2GPaths := preload("g2g_paths.gd")
+
 ## Settings, audio, effects and a console, on a client whose whole output is a number.
 ##
 ## [b]Every decision in this file is downstream of one sentence: a player who came to run
@@ -22,7 +24,7 @@ const CHANNEL := "g2g.presentation"
 
 const SCHEMA_VERSION := 1
 const SOUND_DIR := "res://audio"
-const FX_DIR := "res://scenes/fx"
+static var FX_DIR := G2GPaths.rebase("res://scenes/fx")
 
 var settings: DotSettingsManager = null
 var audio: DotAudioManager = null

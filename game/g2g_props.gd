@@ -1,5 +1,7 @@
 extends Node
 
+const G2GPaths := preload("g2g_paths.gd")
+
 const G2GGame := preload("g2g_game.gd")
 const G2GPlayer := preload("g2g_player.gd")
 const G2GStats := preload("g2g_stats.gd")
@@ -115,7 +117,7 @@ static func catalogue() -> DotPropCatalogue:
 
 
 static func _block() -> DotPropDef:
-	var def := DotPropDef.make(BLOCK, "res://props/g2g_block_small.tscn")
+	var def := DotPropDef.make(BLOCK, G2GPaths.rebase("res://props/g2g_block_small.tscn"))
 	def.display_name = "Block (32u)"
 	def.category = &"practice"
 	def.size = DotPropDef.Size.SMALL
@@ -125,7 +127,7 @@ static func _block() -> DotPropDef:
 
 
 static func _block_wide() -> DotPropDef:
-	var def := DotPropDef.make(BLOCK_WIDE, "res://props/g2g_block_medium.tscn")
+	var def := DotPropDef.make(BLOCK_WIDE, G2GPaths.rebase("res://props/g2g_block_medium.tscn"))
 	def.display_name = "Block (64u)"
 	def.category = &"practice"
 	def.size = DotPropDef.Size.MEDIUM
@@ -135,7 +137,7 @@ static func _block_wide() -> DotPropDef:
 
 
 static func _platform() -> DotPropDef:
-	var def := DotPropDef.make(PLATFORM, "res://props/g2g_platform.tscn")
+	var def := DotPropDef.make(PLATFORM, G2GPaths.rebase("res://props/g2g_platform.tscn"))
 	def.display_name = "Platform (128u)"
 	def.category = &"practice"
 	def.size = DotPropDef.Size.LARGE

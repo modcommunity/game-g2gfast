@@ -1,5 +1,7 @@
 extends Node
 
+const G2GPaths := preload("g2g_paths.gd")
+
 const G2GArsenal := preload("g2g_arsenal.gd")
 const G2GCombat := preload("g2g_combat.gd")
 const G2GEffects := preload("g2g_effects.gd")
@@ -47,7 +49,7 @@ const SPRINTER := &"g2g_sprinter"
 
 const FACTION := &"hunter"
 
-const BRAIN_PATH := "res://game/g2g_hunter_brain.gd"
+static var BRAIN_PATH := G2GPaths.rebase("res://game/g2g_hunter_brain.gd")
 
 ## A hunter died. Carries the player id that killed it, or empty.
 signal hunter_killed(npc: DotNpcInstance, killer: StringName)
@@ -209,7 +211,7 @@ static func catalogue() -> DotNpcCatalogue:
 
 
 static func _stalker() -> DotNpcDef:
-	var def := DotNpcDef.make(STALKER, "res://npcs/g2g_stalker.tscn")
+	var def := DotNpcDef.make(STALKER, G2GPaths.rebase("res://npcs/g2g_stalker.tscn"))
 	def.display_name = "Stalker"
 	def.category = &"hunter"
 	def.faction = FACTION
@@ -227,7 +229,7 @@ static func _stalker() -> DotNpcDef:
 
 
 static func _sprinter() -> DotNpcDef:
-	var def := DotNpcDef.make(SPRINTER, "res://npcs/g2g_sprinter.tscn")
+	var def := DotNpcDef.make(SPRINTER, G2GPaths.rebase("res://npcs/g2g_sprinter.tscn"))
 	def.display_name = "Sprinter"
 	def.category = &"hunter"
 	def.faction = FACTION

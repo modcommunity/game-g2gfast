@@ -1,5 +1,7 @@
 extends "g2g_map.gd"
 
+const G2GPaths := preload("g2g_paths.gd")
+
 const G2GLighting := preload("g2g_lighting.gd")
 const G2GTextures := preload("g2g_textures.gd")
 
@@ -309,8 +311,8 @@ func _material_for(s: Dictionary, dir: String, lightmap: Texture2D) -> ShaderMat
 	# transparent pass -- see the comment at the top of it. Opaque is the default and
 	# the twenty surfaces the maps actually declare translucent are the exception, which
 	# is the way round the .bsp itself says.
-	mat.shader = load("res://game/g2g_bsp_translucent.gdshader" if bool(s.get("translucent", false))
-		else "res://game/g2g_bsp_lightmapped.gdshader")
+	mat.shader = load(G2GPaths.rebase("res://game/g2g_bsp_translucent.gdshader") if bool(s.get("translucent", false))
+		else G2GPaths.rebase("res://game/g2g_bsp_lightmapped.gdshader"))
 	mat.set_shader_parameter("lightmap_tex", lightmap)
 	mat.set_shader_parameter("light_boost", light_boost)
 	mat.set_shader_parameter("ambient", ambient)

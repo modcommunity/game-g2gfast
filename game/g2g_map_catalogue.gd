@@ -1,5 +1,7 @@
 extends RefCounted
 
+const G2GPaths := preload("g2g_paths.gd")
+
 ## Finds every map this game can play, by looking rather than by being told.
 ##
 ## [b]There is no list of maps anywhere in this repository.[/b] There was one — three
@@ -28,17 +30,17 @@ extends RefCounted
 ## paths searched include ones outside `res://` for exactly that reason.
 
 const CHANNEL := "g2g.maps"
-const BUILT_IN_DIR := "res://maps"
+static var BUILT_IN_DIR := G2GPaths.rebase("res://maps")
 
 ## The one scene every imported map uses. It is in the build; the maps are not.
-const IMPORTED_SCENE := "res://maps/imported_map.tscn"
+static var IMPORTED_SCENE := G2GPaths.rebase("res://maps/imported_map.tscn")
 
 ## Where imported maps are looked for, in order, before anything the host adds.
 ##
 ## `res://maps/imported` is where a run from source keeps them and is baked into an
 ## export; `user://maps` is where anything downloaded at runtime lands, and is the only
 ## one of the two a shipped server can be given a new map through.
-const IMPORTED_ROOTS := ["res://maps/imported", "user://maps"]
+static var IMPORTED_ROOTS := [G2GPaths.rebase("res://maps/imported"), "user://maps"]
 
 ## Suffixes an exported build appends. [method DirAccess.get_files] returns the names
 ## as they are packed, not as they were authored, so a `.tscn` is `.tscn.remap` in an

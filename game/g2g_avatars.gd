@@ -1,5 +1,7 @@
 extends RefCounted
 
+const G2GPaths := preload("g2g_paths.gd")
+
 ## The stock characters, the schema they fit, and how a player's own avatar replaces
 ## them.
 ##
@@ -104,7 +106,7 @@ static func _part(id: StringName, slot: StringName, channels: int) -> DotAvatarP
 ## The catalogue that finds the stock parts, and any delivered ones through dot-cloud.
 static func catalogue() -> DotAvatarCatalogue:
 	var c := DotAvatarCatalogue.new()
-	c.builtin_prefix = "res://avatars/"
+	c.builtin_prefix = G2GPaths.rebase("res://avatars/")
 	c.builtin_suffix = ".tscn"
 	return c
 
