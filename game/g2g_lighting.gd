@@ -1,4 +1,3 @@
-class_name G2GLighting
 extends RefCounted
 
 ## This game's lighting, which is [DotLightRig] and one decision of its own.

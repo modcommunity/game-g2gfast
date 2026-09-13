@@ -1,4 +1,3 @@
-class_name G2GAvatars
 extends RefCounted
 
 ## The stock characters, the schema they fit, and how a player's own avatar replaces

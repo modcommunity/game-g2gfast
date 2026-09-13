@@ -1,5 +1,7 @@
-class_name G2GEffects
 extends Node
+
+const G2GGame := preload("g2g_game.gd")
+const G2GPlayer := preload("g2g_player.gd")
 
 ## Status effects on a timer server, and the one rule that makes them safe here.
 ##

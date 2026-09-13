@@ -1,5 +1,8 @@
-class_name G2GHud
 extends Control
+
+const G2GConfig := preload("g2g_config.gd")
+const G2GGame := preload("g2g_game.gd")
+const G2GPlayer := preload("g2g_player.gd")
 
 ## The competitive-shooter timer HUD: the clock, the speed in u/s, the keys, the strafes.
 ##

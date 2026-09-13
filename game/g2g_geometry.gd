@@ -1,5 +1,7 @@
-class_name G2GGeometry
 extends RefCounted
+
+const G2GTextures := preload("g2g_textures.gd")
+const G2GUnits := preload("g2g_units.gd")
 
 ## Prototype-textured collision geometry in code, in genre units.
 ##

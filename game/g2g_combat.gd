@@ -1,5 +1,9 @@
-class_name G2GCombat
 extends Node
+
+const G2GArsenal := preload("g2g_arsenal.gd")
+const G2GGame := preload("g2g_game.gd")
+const G2GPlayer := preload("g2g_player.gd")
+const G2GStats := preload("g2g_stats.gd")
 
 ## The deathmatch half: dot-combat, dot-loadout and dot-match on a movement server.
 ##

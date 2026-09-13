@@ -1,5 +1,9 @@
-class_name G2GProps
 extends Node
+
+const G2GGame := preload("g2g_game.gd")
+const G2GPlayer := preload("g2g_player.gd")
+const G2GStats := preload("g2g_stats.gd")
+const G2GUnits := preload("g2g_units.gd")
 
 ## Blocks an admin can place on a course, and take away again.
 ##

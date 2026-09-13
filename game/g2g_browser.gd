@@ -1,5 +1,6 @@
-class_name G2GBrowser
 extends Node
+
+const G2GBrowser := preload("g2g_browser.gd")
 
 ## The server browser: dot-browser's client half, for a records community.
 ##

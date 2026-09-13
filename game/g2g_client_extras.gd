@@ -1,5 +1,8 @@
-class_name G2GClientExtras
 extends Node
+
+const G2GGame := preload("g2g_game.gd")
+const G2GNetBridge := preload("net/g2g_net_bridge.gd")
+const G2GServices := preload("g2g_services.gd")
 
 ## The client halves of chat and voice.
 ##

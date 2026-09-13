@@ -1,5 +1,6 @@
-class_name G2GAwards
 extends RefCounted
+
+const G2GStats := preload("g2g_stats.gd")
 
 ## What a player earns on a timer server, as a document rather than as code.
 ##

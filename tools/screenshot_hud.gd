@@ -1,5 +1,10 @@
 extends SceneTree
 
+const G2GConfig := preload("../game/g2g_config.gd")
+const G2GGame := preload("../game/g2g_game.gd")
+const G2GHud := preload("../game/g2g_hud.gd")
+const G2GPlayer := preload("../game/g2g_player.gd")
+
 ## Renders this game's HUD to `screenshots/` so a person can look at it.
 ##
 ## [b]This was the only game in the family with no way to look at its own interface.[/b]

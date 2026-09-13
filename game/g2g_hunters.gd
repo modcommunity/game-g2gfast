@@ -1,5 +1,12 @@
-class_name G2GHunters
 extends Node
+
+const G2GArsenal := preload("g2g_arsenal.gd")
+const G2GCombat := preload("g2g_combat.gd")
+const G2GEffects := preload("g2g_effects.gd")
+const G2GGame := preload("g2g_game.gd")
+const G2GPlayer := preload("g2g_player.gd")
+const G2GStats := preload("g2g_stats.gd")
+const G2GUnits := preload("g2g_units.gd")
 
 ## Hunters on the course: dot-npc, dot-npc-ai and dot-npc-ai-director.
 ##

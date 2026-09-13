@@ -1,4 +1,3 @@
-class_name G2GMapCatalogue
 extends RefCounted
 
 ## Finds every map this game can play, by looking rather than by being told.

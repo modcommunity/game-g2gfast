@@ -1,5 +1,8 @@
 extends Node3D
 
+const G2GBspMap := preload("../game/g2g_bsp_map.gd")
+const G2GUnits := preload("../game/g2g_units.gd")
+
 ## Sweeps the player's own hull DOWN a ramp, everywhere, and reports where it stops.
 ##
 ## [b][method collision_probe] asks whether a surface is solid; nothing asked whether a

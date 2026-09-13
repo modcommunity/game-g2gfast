@@ -1,5 +1,6 @@
-class_name G2GVote
 extends Node
+
+const G2GGame := preload("g2g_game.gd")
 
 ## What plays next, decided by the players, with the genre's own rules.
 ##

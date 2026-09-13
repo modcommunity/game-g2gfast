@@ -1,5 +1,7 @@
 extends Node3D
 
+const G2GUnits := preload("../game/g2g_units.gd")
+
 ## Renders avatar parts side by side and exits.
 ##
 ## `godot --path . tools/avatar_preview.tscn -- <out.png> [count]`

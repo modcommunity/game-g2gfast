@@ -1,5 +1,22 @@
-class_name G2GGame
 extends Node3D
+
+const G2GAvatars := preload("g2g_avatars.gd")
+const G2GBspMap := preload("g2g_bsp_map.gd")
+const G2GCamera := preload("g2g_camera.gd")
+const G2GCombat := preload("g2g_combat.gd")
+const G2GConfig := preload("g2g_config.gd")
+const G2GEffects := preload("g2g_effects.gd")
+const G2GHunters := preload("g2g_hunters.gd")
+const G2GMap := preload("g2g_map.gd")
+const G2GMapCatalogue := preload("g2g_map_catalogue.gd")
+const G2GMovement := preload("g2g_movement.gd")
+const G2GPlayer := preload("g2g_player.gd")
+const G2GPlayerStack := preload("g2g_player_stack.gd")
+const G2GProgress := preload("g2g_progress.gd")
+const G2GProps := preload("g2g_props.gd")
+const G2GReplays := preload("g2g_replays.gd")
+const G2GSpectate := preload("g2g_spectate.gd")
+const G2GUnits := preload("g2g_units.gd")
 
 ## g2gfast: the simulation. Maps, timers, styles, records, and every player.
 ##

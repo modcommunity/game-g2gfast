@@ -1,5 +1,7 @@
-class_name G2GMovement
 extends RefCounted
+
+const G2GConfig := preload("g2g_config.gd")
+const G2GUnits := preload("g2g_units.gd")
 
 ## Turns a [G2GConfig] — genre units, the genre's cvars — into the [DotFpsTunables] the
 ## motor simulates with.

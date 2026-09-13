@@ -1,4 +1,3 @@
-class_name G2GReplays
 extends RefCounted
 
 ## The best replay per map, track and style — what the world-record ghost plays.

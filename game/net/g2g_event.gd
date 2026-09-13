@@ -1,5 +1,7 @@
-class_name G2GEvent
 extends DotNetMessage
+
+const G2GEvent := preload("g2g_event.gd")
+const G2GEvents := preload("g2g_events.gd")
 
 ## Anything the authority tells a client that is not a snapshot. Reliable, to clients.
 

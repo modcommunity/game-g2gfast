@@ -1,4 +1,3 @@
-class_name G2GPresentation
 extends Node
 
 ## Settings, audio, effects and a console, on a client whose whole output is a number.

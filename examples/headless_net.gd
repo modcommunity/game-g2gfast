@@ -1,4 +1,14 @@
 extends Node
+
+const G2GAvatars := preload("../game/g2g_avatars.gd")
+const G2GConfig := preload("../game/g2g_config.gd")
+const G2GEvents := preload("../game/net/g2g_events.gd")
+const G2GGame := preload("../game/g2g_game.gd")
+const G2GMovement := preload("../game/g2g_movement.gd")
+const G2GNetBridge := preload("../game/net/g2g_net_bridge.gd")
+const G2GNetCommand := preload("../game/net/g2g_net_command.gd")
+const G2GPlayer := preload("../game/g2g_player.gd")
+const G2GUnits := preload("../game/g2g_units.gd")
 ## game-g2gfast's netcode, end to end, in one process.
 ##
 ## A server game and a client game, each with its own [DotNetManager] and

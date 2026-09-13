@@ -1,5 +1,17 @@
 extends Node
 
+const G2GAvatars := preload("../game/g2g_avatars.gd")
+const G2GBrowser := preload("../game/g2g_browser.gd")
+const G2GCamera := preload("../game/g2g_camera.gd")
+const G2GConfig := preload("../game/g2g_config.gd")
+const G2GGame := preload("../game/g2g_game.gd")
+const G2GIdentity := preload("../game/g2g_identity.gd")
+const G2GPlayer := preload("../game/g2g_player.gd")
+const G2GProps := preload("../game/g2g_props.gd")
+const G2GServices := preload("../game/g2g_services.gd")
+const G2GUnits := preload("../game/g2g_units.gd")
+const G2GVote := preload("../game/g2g_vote.gd")
+
 ## A real DotServer running g2gfast: the movement cvars, and sv_autobunnyhopping in
 ## particular, reaching every player live.
 ##

@@ -1,5 +1,8 @@
-class_name G2GQuery
 extends DotQueryProvider
+
+const G2GGame := preload("g2g_game.gd")
+const G2GNetBridge := preload("net/g2g_net_bridge.gd")
+const G2GPlayer := preload("g2g_player.gd")
 
 ## What this server tells a server browser, beyond the fields A2S has room for.
 ##

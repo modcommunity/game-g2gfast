@@ -1,5 +1,6 @@
-class_name G2GMap
 extends Node3D
+
+const G2GUnits := preload("g2g_units.gd")
 
 ## Base class for the maps this build ships.
 ##

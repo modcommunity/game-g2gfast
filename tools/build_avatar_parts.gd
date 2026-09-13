@@ -1,5 +1,7 @@
 extends SceneTree
 
+const G2GUnits := preload("../game/g2g_units.gd")
+
 ## Generates the avatar part scenes from Kenney's Blocky Characters.
 ##
 ## [codeblock]

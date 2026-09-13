@@ -1,4 +1,3 @@
-class_name G2GStats
 extends RefCounted
 
 ## Every per-player number a timer server counts, declared in one place.

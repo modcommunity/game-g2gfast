@@ -1,5 +1,19 @@
 extends Node
 
+const G2GAvatars := preload("../game/g2g_avatars.gd")
+const G2GCamera := preload("../game/g2g_camera.gd")
+const G2GClient := preload("../game/g2g_client.gd")
+const G2GConfig := preload("../game/g2g_config.gd")
+const G2GEffects := preload("../game/g2g_effects.gd")
+const G2GGame := preload("../game/g2g_game.gd")
+const G2GMapCatalogue := preload("../game/g2g_map_catalogue.gd")
+const G2GMovement := preload("../game/g2g_movement.gd")
+const G2GPlayer := preload("../game/g2g_player.gd")
+const G2GReplays := preload("../game/g2g_replays.gd")
+const G2GRig := preload("../game/g2g_rig.gd")
+const G2GStats := preload("../game/g2g_stats.gd")
+const G2GUnits := preload("../game/g2g_units.gd")
+
 ## Runs g2gfast headless: units, the genre field of view, a stock avatar on a rig,
 ## first and third person, auto-bhop gated by the config, and a bot down both maps.
 ##

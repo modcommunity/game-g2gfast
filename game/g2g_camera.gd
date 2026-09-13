@@ -1,5 +1,7 @@
-class_name G2GCamera
 extends Node3D
+
+const G2GRig := preload("g2g_rig.gd")
+const G2GUnits := preload("g2g_units.gd")
 
 ## First person and third person, with the genre's field of view.
 ##

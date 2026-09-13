@@ -1,5 +1,7 @@
-class_name G2GNetLink
 extends Node
+
+const G2GNetBridge := preload("g2g_net_bridge.gd")
+const G2GNetLink := preload("g2g_net_link.gd")
 
 ## The four remote calls this game needs, on one node that exists on both ends.
 ##

@@ -1,5 +1,13 @@
-class_name G2GClient
 extends Node
+
+const G2GBrowser := preload("g2g_browser.gd")
+const G2GClientExtras := preload("g2g_client_extras.gd")
+const G2GConfig := preload("g2g_config.gd")
+const G2GGame := preload("g2g_game.gd")
+const G2GHud := preload("g2g_hud.gd")
+const G2GNetBridge := preload("net/g2g_net_bridge.gd")
+const G2GPlayer := preload("g2g_player.gd")
+const G2GPresentation := preload("g2g_presentation.gd")
 
 ## A playable g2gfast: one local player, a camera, a HUD, and the keys.
 ##

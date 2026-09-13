@@ -1,5 +1,8 @@
-class_name G2GRig
 extends Node3D
+
+const G2GAvatars := preload("g2g_avatars.gd")
+const G2GMovement := preload("g2g_movement.gd")
+const G2GUnits := preload("g2g_units.gd")
 
 ## The visible character: attachment nodes for the avatar slots, sized to the genre
 ## hull, and the switch between "I am looking out of it" and "I am looking at it".

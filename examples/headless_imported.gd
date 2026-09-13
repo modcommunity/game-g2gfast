@@ -1,5 +1,11 @@
 extends Node
 
+const G2GBspMap := preload("../game/g2g_bsp_map.gd")
+const G2GConfig := preload("../game/g2g_config.gd")
+const G2GGame := preload("../game/g2g_game.gd")
+const G2GPlayer := preload("../game/g2g_player.gd")
+const G2GUnits := preload("../game/g2g_units.gd")
+
 ## Checks a map imported from a Source .bsp: it loads, it is the right size, it is
 ## lit, and — the only question that matters — a player put on it stays on it.
 ##

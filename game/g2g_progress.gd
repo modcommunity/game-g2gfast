@@ -1,5 +1,10 @@
-class_name G2GProgress
 extends Node
+
+const G2GAwards := preload("g2g_awards.gd")
+const G2GGame := preload("g2g_game.gd")
+const G2GPlayer := preload("g2g_player.gd")
+const G2GStats := preload("g2g_stats.gd")
+const G2GUnits := preload("g2g_units.gd")
 
 ## What a player keeps: statistics and achievements, over the runs they actually made.
 ##

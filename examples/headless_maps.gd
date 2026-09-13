@@ -1,5 +1,10 @@
 extends Node
 
+const G2GConfig := preload("../game/g2g_config.gd")
+const G2GGame := preload("../game/g2g_game.gd")
+const G2GMap := preload("../game/g2g_map.gd")
+const G2GMapCatalogue := preload("../game/g2g_map_catalogue.gd")
+
 ## Checks that maps are found rather than listed, and that dropping one in or out
 ## reaches a running game.
 ##

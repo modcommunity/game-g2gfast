@@ -1,5 +1,10 @@
 extends SceneTree
 
+const G2GBspMap := preload("../game/g2g_bsp_map.gd")
+const G2GConfig := preload("../game/g2g_config.gd")
+const G2GMovement := preload("../game/g2g_movement.gd")
+const G2GUnits := preload("../game/g2g_units.gd")
+
 ## Is every spawn point on an imported map somewhere a player can actually be?
 ##
 ## [b]"I get stuck when I spawn" is a question no existing check asks.[/b]

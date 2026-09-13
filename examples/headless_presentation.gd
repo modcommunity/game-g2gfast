@@ -1,5 +1,8 @@
 extends Node
 
+const G2GParty := preload("../game/g2g_party.gd")
+const G2GPresentation := preload("../game/g2g_presentation.gd")
+
 ## Settings, audio, effects, the console and the practice session.
 ##
 ## [codeblock]

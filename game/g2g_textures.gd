@@ -1,5 +1,6 @@
-class_name G2GTextures
 extends RefCounted
+
+const G2GUnits := preload("g2g_units.gd")
 
 ## Prototype ("dev") textures for the maps, and where a real texture set is dropped in.
 ##

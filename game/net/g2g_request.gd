@@ -1,5 +1,7 @@
-class_name G2GRequest
 extends DotNetMessage
+
+const G2GEvents := preload("g2g_events.gd")
+const G2GRequest := preload("g2g_request.gd")
 
 ## Anything a client asks the authority for. Reliable, rare, to the server only.
 ##

@@ -1,5 +1,6 @@
-class_name G2GIdentity
 extends Node
+
+const G2GAvatars := preload("g2g_avatars.gd")
 
 ## Who a player is: content delivery, a profile, an avatar, and one admission flow.
 ##

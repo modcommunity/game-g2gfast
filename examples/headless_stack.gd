@@ -1,5 +1,9 @@
 extends Node
 
+const G2GConfig := preload("../game/g2g_config.gd")
+const G2GGame := preload("../game/g2g_game.gd")
+const G2GPlayerStack := preload("../game/g2g_player_stack.gd")
+
 ## The player stack, run against a real timer server rather than against a stub.
 ##
 ## [codeblock]

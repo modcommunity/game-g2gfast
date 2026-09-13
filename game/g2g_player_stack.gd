@@ -1,5 +1,7 @@
-class_name G2GPlayerStack
 extends Node
+
+const G2GGame := preload("g2g_game.gd")
+const G2GPlayer := preload("g2g_player.gd")
 
 ## The player-facing addons, stood up once and bound to the timer server.
 ##

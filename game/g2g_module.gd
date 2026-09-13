@@ -1,5 +1,20 @@
 extends DotModule
 
+const G2GCamera := preload("g2g_camera.gd")
+const G2GCombat := preload("g2g_combat.gd")
+const G2GConfig := preload("g2g_config.gd")
+const G2GGame := preload("g2g_game.gd")
+const G2GHunters := preload("g2g_hunters.gd")
+const G2GIdentity := preload("g2g_identity.gd")
+const G2GNetBridge := preload("net/g2g_net_bridge.gd")
+const G2GPlayer := preload("g2g_player.gd")
+const G2GProps := preload("g2g_props.gd")
+const G2GQuery := preload("g2g_query.gd")
+const G2GServices := preload("g2g_services.gd")
+const G2GStats := preload("g2g_stats.gd")
+const G2GUnits := preload("g2g_units.gd")
+const G2GVote := preload("g2g_vote.gd")
+
 ## Binds a [G2GGame] to a [DotServer]: the movement cvars, and the commands.
 ##
 ## [b]The cvars are the ones those operators already know[/b], with the

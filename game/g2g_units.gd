@@ -1,4 +1,3 @@
-class_name G2GUnits
 extends RefCounted
 
 ## The movement genre's units, and the one place they become metres.

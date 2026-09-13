@@ -1,5 +1,9 @@
 extends Node3D
 
+const G2GBspMap := preload("../game/g2g_bsp_map.gd")
+const G2GMap := preload("../game/g2g_map.gd")
+const G2GMapCatalogue := preload("../game/g2g_map_catalogue.gd")
+
 ## Renders an imported map to PNGs and exits. `tools/bsp_preview.sh <id> <out.png>`.
 ##
 ## An imported map is the one thing in this repository whose bugs are invisible to

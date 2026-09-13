@@ -1,5 +1,7 @@
-class_name G2GEvents
 extends RefCounted
+
+const G2GConfig := preload("../g2g_config.gd")
+const G2GMovement := preload("../g2g_movement.gd")
 
 ## The wire format for everything that is not a snapshot or an input.
 ##

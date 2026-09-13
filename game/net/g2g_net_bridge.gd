@@ -1,5 +1,14 @@
-class_name G2GNetBridge
 extends Node
+
+const G2GConfig := preload("../g2g_config.gd")
+const G2GEvent := preload("g2g_event.gd")
+const G2GEvents := preload("g2g_events.gd")
+const G2GGame := preload("../g2g_game.gd")
+const G2GNetCommand := preload("g2g_net_command.gd")
+const G2GNetLink := preload("g2g_net_link.gd")
+const G2GPlayer := preload("../g2g_player.gd")
+const G2GPlayerNet := preload("g2g_player_net.gd")
+const G2GRequest := preload("g2g_request.gd")
 
 ## Joins a [G2GGame] to a [DotNetManager]. The netcode seam, and the only file in
 ## this project that names both.

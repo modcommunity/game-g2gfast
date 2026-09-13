@@ -1,5 +1,6 @@
-class_name G2GConfig
 extends DotConfig
+
+const G2GUnits := preload("g2g_units.gd")
 
 ## Everything a g2gfast server is configured with, in genre units, layered like every
 ## [DotConfig]: exported defaults, then a JSON file, then [code]G2G_*[/code]

@@ -1,5 +1,6 @@
-class_name G2GNetCommand
 extends DotNetInput
+
+const G2GNetCommand := preload("g2g_net_command.gd")
 
 ## One tick of a player's intent, on the wire: a [DotFpsCommand], and the trigger.
 ##

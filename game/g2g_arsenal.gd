@@ -1,4 +1,3 @@
-class_name G2GArsenal
 extends RefCounted
 
 ## The weapons, items and damage a deathmatch server runs with.

@@ -1,4 +1,3 @@
-class_name G2GParty
 extends Node
 
 ## Peer-to-peer, and the one game in this family that refuses to file anything from it.

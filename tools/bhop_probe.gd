@@ -1,5 +1,10 @@
 extends Node3D
 
+const G2GBspMap := preload("../game/g2g_bsp_map.gd")
+const G2GConfig := preload("../game/g2g_config.gd")
+const G2GMovement := preload("../game/g2g_movement.gd")
+const G2GUnits := preload("../game/g2g_units.gd")
+
 ## Bunny-hops across a map with the real motor and reports anybody who leaves it.
 ##
 ## [b]"I bhop and go through the floor" is the one failure no probe here could see.[/b]

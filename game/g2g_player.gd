@@ -1,5 +1,10 @@
-class_name G2GPlayer
 extends Node3D
+
+const G2GCamera := preload("g2g_camera.gd")
+const G2GConfig := preload("g2g_config.gd")
+const G2GMovement := preload("g2g_movement.gd")
+const G2GRig := preload("g2g_rig.gd")
+const G2GUnits := preload("g2g_units.gd")
 
 ## One player: the movement, the rig they are drawn as, the camera they look through,
 ## and their timer.

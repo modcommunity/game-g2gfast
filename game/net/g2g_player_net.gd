@@ -1,5 +1,8 @@
-class_name G2GPlayerNet
 extends DotNetBehaviour
+
+const G2GNetBridge := preload("g2g_net_bridge.gd")
+const G2GNetCommand := preload("g2g_net_command.gd")
+const G2GPlayer := preload("../g2g_player.gd")
 
 ## What a networked g2gfast player replicates: the movement state, and nothing else.
 ##

@@ -1,5 +1,7 @@
-class_name G2GServices
 extends Node
+
+const G2GGame := preload("g2g_game.gd")
+const G2GPlayer := preload("g2g_player.gd")
 
 ## Chat, voice and moderation on a dedicated timer server.
 ##
