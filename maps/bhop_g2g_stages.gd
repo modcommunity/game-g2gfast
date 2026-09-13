@@ -1,7 +1,6 @@
 extends "../game/g2g_map.gd"
 
 const G2GGeometry := preload("../game/g2g_geometry.gd")
-const G2GMap := preload("../game/g2g_map.gd")
 
 ## `bhop_g2g_stages` — five stages, a bonus, and a different idea in each stage.
 ##

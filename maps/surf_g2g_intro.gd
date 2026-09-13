@@ -1,7 +1,6 @@
 extends "../game/g2g_map.gd"
 
 const G2GGeometry := preload("../game/g2g_geometry.gd")
-const G2GMap := preload("../game/g2g_map.gd")
 
 ## `surf_g2g_intro` — two ramps meeting in a valley, descending, with a bonus.
 ##

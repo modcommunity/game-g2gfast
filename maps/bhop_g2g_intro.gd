@@ -1,7 +1,6 @@
 extends "../game/g2g_map.gd"
 
 const G2GGeometry := preload("../game/g2g_geometry.gd")
-const G2GMap := preload("../game/g2g_map.gd")
 
 ## `bhop_g2g_intro` — sixteen blocks with widening gaps, three stages, and a bonus.
 ##

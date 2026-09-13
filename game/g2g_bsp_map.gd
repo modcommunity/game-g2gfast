@@ -1,7 +1,6 @@
 extends "g2g_map.gd"
 
 const G2GLighting := preload("g2g_lighting.gd")
-const G2GMap := preload("g2g_map.gd")
 const G2GTextures := preload("g2g_textures.gd")
 
 ## A map imported from a Source .bsp, built at load from a manifest anywhere on disk.
